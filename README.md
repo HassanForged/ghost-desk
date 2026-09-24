@@ -11,7 +11,9 @@ Local terminal agent. Your brain, your machine, your notes.
 
 ## Install
 
-Python 3.11 or newer.
+Python 3.11 or newer. The stub and local Ollama need no API key.
+
+### Windows
 
 ```powershell
 python -m venv .venv
@@ -20,9 +22,14 @@ pip install -e .
 ghost --help
 ```
 
-On macOS or Linux, activate with `source .venv/bin/activate`.
+### Mac and Linux
 
-The stub and local Ollama need no API key.
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+ghost --help
+```
 
 ## Try this
 
