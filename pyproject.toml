@@ -1,0 +1,32 @@
+[project]
+name = "ghost-desk"
+version = "0.1.0"
+description = "Local CLI agent. Your key, your disk."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.40.0",
+    "rich>=13.7.0",
+    "prompt_toolkit>=3.0.43",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+ghost = "ghost_desk.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+ghost_desk = ["skills/*.md", "skills/*/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
