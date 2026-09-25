@@ -25,7 +25,7 @@ Then open a new terminal and run:
 ghost
 ```
 
-The installer needs Git and Python 3.11+. It puts `ghost` in `~/.local/bin`.
+Needs Git. System Python 3.9 on a Mac is fine — the installer fetches Python 3.12 for Ghost Desk only (no Homebrew). It puts `ghost` in `~/.local/bin`.
 
 If `ghost` is not found:
 

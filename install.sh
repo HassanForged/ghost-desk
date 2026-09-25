@@ -2,6 +2,7 @@
 # Ghost Desk — macOS and Linux installer.
 # Paste:
 #   curl -fsSL https://raw.githubusercontent.com/HassanForged/ghost-desk/main/install.sh | bash
+# Does not need Homebrew or a new system Python. Macs on 3.9 are fine.
 set -euo pipefail
 
 REPO="${GHOST_DESK_REPO:-https://github.com/HassanForged/ghost-desk.git}"
@@ -29,24 +30,23 @@ case "$os_name" in
     ;;
 esac
 
+command -v curl >/dev/null 2>&1 || fail "curl is required"
 command -v git >/dev/null 2>&1 || fail "git is required (mac: xcode-select --install / linux: install git)"
 
-pick_python() {
-  local candidate version
-  for candidate in "${GHOST_PYTHON:-}" python3.13 python3.12 python3.11 python3; do
-    [ -n "$candidate" ] || continue
-    command -v "$candidate" >/dev/null 2>&1 || continue
-    version="$("$candidate" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)"
-    case "$version" in
-      3.1[1-9]|3.[2-9][0-9]) echo "$candidate"; return 0 ;;
-    esac
-  done
-  return 1
+export PATH="$BIN_DIR:$HOME/.cargo/bin:$PATH"
+
+ensure_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    return 0
+  fi
+  info "installing uv so Ghost Desk can use Python 3.12 without Homebrew"
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$BIN_DIR:$HOME/.cargo/bin:$PATH"
+  command -v uv >/dev/null 2>&1 || fail "uv did not land on PATH. Open a new terminal and run the install line again."
 }
 
-PYTHON="$(pick_python)" || fail "Python 3.11 or newer is required. mac: brew install python@3.12   linux: install python3.12 and python3.12-venv"
-
 mkdir -p "$PREFIX" "$BIN_DIR"
+ensure_uv
 
 if [ -d "$PREFIX/.git" ]; then
   info "updating $PREFIX"
@@ -58,12 +58,12 @@ else
   git clone --depth 1 --branch "$REF" "$REPO" "$PREFIX"
 fi
 
-info "using $PYTHON"
-"$PYTHON" -m venv "$PREFIX/.venv"
-# shellcheck disable=SC1091
-. "$PREFIX/.venv/bin/activate"
-python -m pip install --upgrade pip
-python -m pip install -e "$PREFIX"
+info "installing Python 3.12 for Ghost Desk only (leaves system Python alone)"
+uv python install 3.12
+info "creating venv"
+uv venv --python 3.12 "$PREFIX/.venv"
+info "installing ghost"
+uv pip install --python "$PREFIX/.venv/bin/python" -e "$PREFIX"
 
 ln -sfn "$PREFIX/.venv/bin/ghost" "$BIN_DIR/ghost"
 
@@ -84,7 +84,7 @@ if ! echo ":$PATH:" | grep -q ":$BIN_DIR:"; then
   export PATH="$BIN_DIR:$PATH"
 fi
 
-command -v ghost >/dev/null 2>&1 || fail "ghost is not on PATH yet. Open a new terminal, or run: export PATH=\"$BIN_DIR:\$PATH\""
+[ -x "$BIN_DIR/ghost" ] || fail "ghost binary missing at $BIN_DIR/ghost"
 
-info "ok  $($BIN_DIR/ghost --version 2>/dev/null || echo ghost-desk)"
-printf '\nNext:\n  ghost\n\n'
+info "ok  $("$BIN_DIR/ghost" --version 2>/dev/null || echo ghost-desk)"
+printf '\nNext (new terminal if needed):\n  ghost\n\nIf ghost is not found:\n  export PATH="$HOME/.local/bin:$PATH"\n  ghost\n\n'
