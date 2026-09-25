@@ -8,8 +8,8 @@ HOOD = Path(__file__).resolve().parent / "assets" / "hood.jpg"
 
 BOOT_WIDTH = 36
 BOOT_HEIGHT = 32
-SESSION_WIDTH = 34
-SESSION_HEIGHT = 30
+SESSION_WIDTH = 22
+SESSION_HEIGHT = 26
 _BLACK = 16
 
 

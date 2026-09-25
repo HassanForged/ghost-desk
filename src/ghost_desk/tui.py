@@ -27,7 +27,7 @@ def session_chrome() -> dict:
 
     return {
         "ghost_side": "right",
-        "header": False,
+        "header": True,
         "ghost_width": SESSION_WIDTH,
         "ghost_height": SESSION_HEIGHT,
     }
@@ -382,7 +382,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             lines.append(("you", str(message["content"]).strip()))
         elif message.get("role") == "assistant" and message.get("content"):
             lines.append(("ghost", str(message["content"]).strip()))
-    state = {"activity": "idle", "tick": 0, "stream": "", "busy": False}
+    state = {"activity": "idle", "tick": 0, "stream": "", "busy": False, "started": 0.0}
 
     def refresh() -> None:
         if app.is_running:
@@ -407,16 +407,26 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     desk.start()
 
     def chat_fragments():
-        fragments: list[tuple[str, str]] = [("fg:#8a8a8a", "session open\n\n")]
+        fragments: list[tuple[str, str]] = []
         for role, text in lines:
             if role == "you":
-                fragments.append(("fg:#eeeeee", text + "\n\n"))
+                fragments.append(("class:user", "❯  " + text + "\n"))
             elif role == "ghost":
-                fragments.append(("fg:#c8c8c8", text + "\n\n"))
+                fragments.append(("class:reply", text + "\n\n"))
+            elif role == "tool":
+                fragments.append(("class:tool", "  · " + text + "\n"))
+            elif role == "ask":
+                fragments.append(("class:ask", "  ? " + text + "\n"))
             else:
-                fragments.append(("fg:#8a8a8a", text + "\n"))
+                fragments.append(("class:muted", "  " + text + "\n"))
         if state["stream"]:
-            fragments.append(("fg:#c8c8c8", state["stream"]))
+            fragments.append(("class:reply", state["stream"]))
+        elif state["busy"]:
+            elapsed = max(0, int(time.monotonic() - state["started"]))
+            label = {"searching": "searching", "reading": "reading", "working": "working"}.get(
+                state["activity"], "thinking"
+            )
+            fragments.append(("class:status", f"  {label}  {elapsed}s\n"))
         return fragments
 
     chrome = session_chrome()
@@ -456,6 +466,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         state["busy"] = True
         state["activity"] = "working"
         state["stream"] = ""
+        state["started"] = time.monotonic()
 
         def work() -> None:
             def on_text(delta: str) -> None:
@@ -465,14 +476,26 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             def on_status(note: str) -> None:
                 state["activity"] = activity_for(note)
                 if note.startswith("tool "):
-                    lines.append(("note", "● " + note[5:]))
+                    name = note[5:].strip()
+                    if lines and lines[-1][0] == "tool" and lines[-1][1].startswith(name):
+                        prev = lines[-1][1]
+                        if " ×" in prev:
+                            base, _, count = prev.rpartition(" ×")
+                            try:
+                                lines[-1] = ("tool", f"{base} ×{int(count) + 1}")
+                            except ValueError:
+                                lines.append(("tool", name))
+                        else:
+                            lines[-1] = ("tool", f"{name} ×2")
+                    else:
+                        lines.append(("tool", name))
                 app.loop.call_soon_threadsafe(app.invalidate)
 
             def ask_allow(question: str) -> bool:
                 event = threading.Event()
                 pending["event"] = event
                 pending["yes"] = False
-                lines.append(("note", question + "  yes or no"))
+                lines.append(("ask", question + "  y/n"))
                 app.loop.call_soon_threadsafe(app.invalidate)
                 event.wait(timeout=180)
                 return bool(pending["yes"])
@@ -540,12 +563,11 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 state["tick"] += 1
                 app.invalidate()
 
-    from prompt_toolkit.widgets import Frame
-
     ghost = Window(
         content=FormattedTextControl(ghost_fragments),
         width=chrome["ghost_width"] + 1,
         style="class:side",
+        dont_extend_width=True,
     )
     chat = Window(
         content=FormattedTextControl(chat_fragments),
@@ -553,35 +575,60 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         right_margins=[ScrollbarMargin()],
         style="class:chat",
     )
-    typed = Window(content=BufferControl(buffer=buffer), height=1, style="class:composer")
-    composer = Frame(typed, style="class:box")
-    where = str(config.workspace())
-    status_bar = Window(
+    header = Window(
+        height=1,
         content=FormattedTextControl(
             lambda: [
-                ("class:chip", f" {where} "),
-                ("", "  "),
-                ("class:chip", " session open "),
-                ("", "  "),
-                ("class:chip", f" {config.model} "),
+                ("class:brand", " GHOST DESK "),
+                ("class:muted", " · "),
+                ("class:muted", config.model or "brain"),
             ]
         ),
-        height=1,
-        style="class:statusline",
+        style="class:header",
     )
-    left = HSplit([chat, composer, status_bar])
+    typed = Window(
+        content=BufferControl(buffer=buffer),
+        height=1,
+        style="class:composer",
+    )
+    composer = VSplit(
+        [
+            Window(width=3, content=FormattedTextControl(lambda: [("class:prompt", " ❯")])),
+            typed,
+        ],
+        height=1,
+        style="class:composer",
+    )
+    footer = Window(
+        height=1,
+        content=FormattedTextControl(
+            lambda: [
+                ("class:muted", " Enter send  ·  Alt-Enter newline  ·  /help  ·  "),
+                ("class:muted", config.model or ""),
+            ]
+        ),
+        style="class:footer",
+    )
+    left = HSplit([header, chat, composer, footer])
     layout = Layout(VSplit([left, ghost]))
     app = Application(
         layout=layout,
         key_bindings=bindings,
         style=Style.from_dict(
             {
-                "chat": "bg:#000000 #d6d6d6",
-                "side": "bg:#000000",
-                "composer": "bg:#000000 #d6d6d6",
-                "box": "bg:#000000 #4a4a4a",
-                "statusline": "bg:#000000",
-                "chip": "bg:#2a2a2a #c8c8c8",
+                "chat": "bg:#0c0c0c #c8c8c8",
+                "side": "bg:#0c0c0c",
+                "header": "bg:#0c0c0c",
+                "footer": "bg:#0c0c0c",
+                "composer": "bg:#141414 #eeeeee",
+                "prompt": "bg:#141414 #8a8a8a",
+                "brand": "bold #d6d6d6",
+                "user": "bold #eeeeee",
+                "reply": "#c8c8c8",
+                "tool": "#6e6e6e",
+                "ask": "#d6d6d6",
+                "muted": "#6e6e6e",
+                "status": "#8a8a8a italic",
             }
         ),
         full_screen=True,

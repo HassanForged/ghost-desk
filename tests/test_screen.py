@@ -45,6 +45,6 @@ def test_session_keeps_the_ghost_on_the_right():
 
     chrome = session_chrome()
     assert chrome["ghost_side"] == "right"
-    assert chrome["header"] is False
+    assert chrome["header"] is True
     still = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=0)
     assert still
