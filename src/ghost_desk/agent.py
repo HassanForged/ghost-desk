@@ -18,6 +18,7 @@ from ghost_desk.notes import record_verified
 from ghost_desk.permissions import PermissionGate
 from ghost_desk.plan import PlanSession, verify_checklist
 from ghost_desk.verify import Check, VerificationReport, repair_near_facts, verify_facts
+from ghost_desk.environment import build_environment_hints
 from ghost_desk.skills import render_parents
 from ghost_desk.tools import execute, schemas, tool_message
 
@@ -41,9 +42,9 @@ PERSONALITIES = {
 
 @dataclass
 class Budget:
-    max_turns: int = 8
+    max_turns: int = 24
     max_tokens: int = 80_000
-    max_seconds: float = 90
+    max_seconds: float = 300
 
 
 @dataclass
@@ -62,6 +63,7 @@ class DeskSession:
     model_override: str = ""
     parents_text: str = ""
     personality: str = "helpful"
+    frozen_prompt: str = ""
 
 
 def _topic(text: str) -> str:
@@ -81,6 +83,12 @@ def system_prompt(
     data_dir: Path | None = None,
 ) -> str:
     parts = [_BASE, PERSONALITIES.get(session.personality, PERSONALITIES["helpful"])]
+    if workspace is not None:
+        parts.append(build_environment_hints(workspace=workspace, data_dir=data_dir))
+    else:
+        from ghost_desk.environment import TOOL_RULES
+
+        parts.append(TOOL_RULES)
     if data_dir is not None and workspace is not None:
         from ghost_desk.context import load_context
 
@@ -122,43 +130,44 @@ def _keep_facts(data_dir: Path, text: str) -> None:
         file_learned_trick(data_dir / "skills", trick.group(1).lower())
 
 
-def _missing_path_reply(text: str, workspace: Path) -> str:
-    match = re.search(r"(?i)what is inside\s+(\S+)", text or "")
-    if not match:
-        return ""
-    raw = match.group(1).strip("?.\"'")
-    path = Path(raw)
-    if not path.is_absolute():
-        path = workspace / path
-    if path.is_file():
-        return ""
-    return f"{path} is missing."
+def _named_outputs(*parts: str) -> list[str]:
+    names: list[str] = []
+    for part in parts:
+        names.extend(re.findall(r"[\w.-]+\.(?:html|css|js|txt|md|py)", part or ""))
+    return list(dict.fromkeys(names))
 
 
-def _read_config_model(text: str, config: Config, report: VerificationReport) -> str:
-    if not re.search(r"(?i)model", text or "") or not re.search(r"(?i)config", text or ""):
+def _missing_named(workspace: Path, names: list[str]) -> list[str]:
+    missing: list[str] = []
+    for name in names:
+        path = workspace / name
+        if not path.is_file() or path.stat().st_size == 0:
+            missing.append(name)
+    return missing
+
+
+def _unfinished_work(session: DeskSession, workspace: Path, reply: str, user: str) -> str:
+    draft = session.plan.draft
+    if draft is None or draft.status != "approved":
         return ""
-    path = config.config_file()
-    if not path.is_file():
-        report.add(Check("file_read", str(path), "missing", False, "config file is missing"))
-        return "config.json is missing."
-    body = path.read_text(encoding="utf-8")
-    report.add(Check("file_read", str(path), body[:200], True, "read config"))
-    return "Read config file " + str(path) + " model=" + config.model
+    hay = "\n".join([draft.request, "\n".join(draft.checklist), user, reply])
+    missing = _missing_named(workspace, _named_outputs(hay))
+    if not missing:
+        return ""
+    return (
+        "Verification: work is not on disk yet. Missing: "
+        + ", ".join(missing)
+        + ". Keep using tools. Do not claim done."
+    )
 
 
 def _refuse_done_without_files(user: str, reply: str, workspace: Path) -> str:
     if not re.search(r"(?i)\b(done|finished|complete|written)\b", f"{user}\n{reply}"):
         return reply
-    names = re.findall(r"[\w.-]+\.(?:html|css|js|txt|md|py)", f"{user}\n{reply}")
-    missing = []
-    for name in names:
-        path = workspace / name
-        if not path.is_file() or path.stat().st_size == 0:
-            missing.append(name)
+    missing = _missing_named(workspace, _named_outputs(user, reply))
     if not missing:
         return reply
-    return "Not done. Missing: " + ", ".join(dict.fromkeys(missing))
+    return "Not done. Missing: " + ", ".join(missing)
 
 
 def _assistant_message(text: str, tool_calls) -> dict:
@@ -221,17 +230,6 @@ def run_turn(
         draft_lesson(config.data_path(), text)
         (config.data_path() / "current_session.txt").write_text(session.id, encoding="utf-8")
         _keep_facts(config.data_path(), text)
-        missing = _missing_path_reply(text, workspace)
-        if missing:
-            reply = {"role": "assistant", "content": missing}
-            session.history.append(user_message := {"role": "user", "content": text})
-            _log(memory, session, "user", text, user_message)
-            session.history.append(reply)
-            _log(memory, session, "assistant", missing, reply)
-            return AgentResult(missing, report, "stop")
-        forced = _read_config_model(text, config, report)
-        if forced:
-            text = text + "\n\n" + forced
 
     user_message = {"role": "user", "content": text}
     session.history.append(user_message)
@@ -279,7 +277,11 @@ def run_turn(
 
         flush_summary(config.data_path(), str(session.history[0].get("content") or ""))
 
-    prompt = system_prompt(session, memory, text, workspace=workspace, data_dir=config.data_path())
+    if not session.frozen_prompt:
+        session.frozen_prompt = system_prompt(
+            session, memory, "", workspace=workspace, data_dir=config.data_path()
+        )
+    prompt = session.frozen_prompt
     messages: list[dict] = [{"role": "system", "content": prompt}, *session.history]
     tools = schemas(include_ghost=depth == 0 and spawn_fn is not None)
     model = session.model_override or config.model
@@ -341,6 +343,14 @@ def run_turn(
         _log(memory, session, "assistant", response.text or "", assistant)
         if not response.tool_calls:
             final = response.text or ""
+            nudge = _unfinished_work(session, workspace, final, text)
+            if nudge:
+                note = {"role": "user", "content": nudge}
+                messages.append(note)
+                session.history.append(note)
+                _log(memory, session, "user", nudge, note)
+                status("verification: keep working")
+                continue
             reason = "stop"
             break
         for call in response.tool_calls:
@@ -403,10 +413,18 @@ def run_turn(
     elif not final:
         final = report_text
 
+    _commit_final(session, memory, final)
+    return AgentResult(final, report, reason)
+
+
+def _commit_final(session: DeskSession, memory: Memory, final: str) -> None:
+    last = session.history[-1] if session.history else None
+    if last and last.get("role") == "assistant" and not last.get("tool_calls"):
+        last["content"] = final
+        return
     closing = {"role": "assistant", "content": final}
     session.history.append(closing)
     _log(memory, session, "assistant", final, closing)
-    return AgentResult(final, report, reason)
 
 
 def _spawn_ghost(arguments: dict, *, config, gate, memory, depth: int, spawn_fn, report: VerificationReport):

@@ -29,6 +29,20 @@ def test_conversation_prompt_talks_to_the_person(tmp_path):
         memory.close()
 
 
+def test_side_portrait_uses_the_photo_and_moves_while_working():
+    from ghost_desk.face import HOOD, activity_for, render_blocks
+
+    assert HOOD.is_file()
+    still = render_blocks(bob=0)
+    moving = render_blocks(bob=1)
+    assert still and still[0][0][1] != ""
+    assert len(moving) == len(still) + 1
+    assert activity_for("tool web_search") == "searching"
+    assert activity_for("tool file_read") == "reading"
+    assert activity_for("tool file_write") == "working"
+    assert activity_for("ready") == "idle"
+
+
 def test_project_context_prefers_ghost_file_and_soul_is_kept(tmp_path):
     data = tmp_path / "data"
     data.mkdir()

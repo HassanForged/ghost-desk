@@ -98,10 +98,7 @@ def run_smoke(config: Config, client=None) -> int:
 
 
 def play_boot(first: bool) -> str:
-    root = Path(__file__).resolve().parents[2]
-    if str(root) not in sys.path:
-        sys.path.insert(0, str(root))
-    from ghost_boot import run_boot
+    from ghost_desk.boot import run_boot
 
     return run_boot(skip_to_menu=not first)
 
@@ -113,15 +110,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "smoke":
         return run_smoke(config)
     if args.command == "setup":
+        screen = None
         try:
-            number = play_boot(needs_setup(config))
-            setup_interactive(cfg=config, boot_choice=number)
+            from ghost_desk.boot import BootScreen
+
+            screen = BootScreen()
+            screen.enter()
+            screen.play_checks(signed=not needs_setup(config))
+            number = screen.choose()
+            setup_interactive(
+                cfg=config,
+                boot_choice=number,
+                input_fn=screen.ask,
+                output_fn=screen.log,
+            )
+            screen.log("brain locked")
+            screen.log("ready")
         except SetupError as exc:
             print(exc, file=sys.stderr)
             return 2
         except (EOFError, KeyboardInterrupt):
             print("setup did not finish", file=sys.stderr)
             return 2
+        finally:
+            if screen is not None:
+                screen.leave()
         return 0
     if args.command == "export":
         target = Path(args.out).expanduser() if args.out else None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -20,6 +21,17 @@ from ghost_desk.permissions import PermissionGate
 from ghost_desk.agent import PERSONALITIES
 from ghost_desk.skills import ensure_skills, load_child, load_parents, render_index
 from ghost_desk.subagents import spawn
+
+def session_chrome() -> dict:
+    from ghost_desk.face import SESSION_HEIGHT, SESSION_WIDTH
+
+    return {
+        "ghost_side": "right",
+        "header": False,
+        "ghost_width": SESSION_WIDTH,
+        "ghost_height": SESSION_HEIGHT,
+    }
+
 
 HELP = """\
 /help        show this list
@@ -334,6 +346,261 @@ def _asker(console: Console | None, prompter: Callable[[str], str] | None):
     return ask
 
 
+class _Log:
+    """Slash commands write here. The chat pane reads it."""
+
+    def __init__(self, lines: list[tuple[str, str]], refresh: Callable[[], None]) -> None:
+        self.lines = lines
+        self.refresh = refresh
+
+    def print(self, *args, **_kwargs) -> None:
+        text = " ".join(str(part) for part in args)
+        self.lines.append(("note", text))
+        self.refresh()
+
+
+def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSession, skills_root: Path, status: Status) -> int:
+    import asyncio
+
+    from prompt_toolkit.application import Application
+    from prompt_toolkit.buffer import Buffer
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.layout.containers import HSplit, VSplit, Window
+    from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+    from prompt_toolkit.layout.layout import Layout
+    from prompt_toolkit.layout.margins import ScrollbarMargin
+    from prompt_toolkit.styles import Style
+
+    from ghost_desk.face import activity_for, render_blocks
+
+    import threading
+
+    lines: list[tuple[str, str]] = []
+    pending: dict = {"event": None, "yes": False}
+    for message in session.history:
+        if message.get("role") == "user" and message.get("content"):
+            lines.append(("you", str(message["content"]).strip()))
+        elif message.get("role") == "assistant" and message.get("content"):
+            lines.append(("ghost", str(message["content"]).strip()))
+    state = {"activity": "idle", "tick": 0, "stream": "", "busy": False}
+
+    def refresh() -> None:
+        if app.is_running:
+            app.invalidate()
+
+    log = _Log(lines, refresh)
+
+    def unattended(prompt: str) -> str:
+        gate = PermissionGate(config.workspace(), ask=lambda _question: False)
+        result = run_turn(
+            prompt,
+            config=config,
+            memory=memory,
+            session=DeskSession(parents_text=session.parents_text),
+            gate=gate,
+            depth=0,
+            spawn_fn=None,
+        )
+        return result.text
+
+    desk = BackgroundDesk(memory, unattended)
+    desk.start()
+
+    def chat_fragments():
+        fragments: list[tuple[str, str]] = [("fg:#8a8a8a", "session open\n\n")]
+        for role, text in lines:
+            if role == "you":
+                fragments.append(("fg:#eeeeee", text + "\n\n"))
+            elif role == "ghost":
+                fragments.append(("fg:#c8c8c8", text + "\n\n"))
+            else:
+                fragments.append(("fg:#8a8a8a", text + "\n"))
+        if state["stream"]:
+            fragments.append(("fg:#c8c8c8", state["stream"]))
+        return fragments
+
+    chrome = session_chrome()
+
+    def ghost_fragments():
+        bob = state["tick"] % 3 if state["activity"] != "idle" else 0
+        rows = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=bob)
+        fragments: list[tuple[str, str]] = []
+        for row in rows:
+            fragments.extend(row)
+            fragments.append(("", "\n"))
+        label = {"searching": "searching", "reading": "reading", "working": "working"}.get(state["activity"], "")
+        if label:
+            fragments.append(("fg:#8a8a8a", label + ("." * (state["tick"] % 4)) + "\n"))
+        return fragments
+
+    buffer = Buffer(multiline=True)
+
+    def submit() -> None:
+        text = buffer.text
+        buffer.reset()
+        if pending["event"] is not None:
+            pending["yes"] = text.strip().lower() in {"y", "yes"}
+            pending["event"].set()
+            pending["event"] = None
+            return
+        if not text.strip() or state["busy"]:
+            return
+        lines.append(("you", text.strip()))
+        handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root)
+        if handled == "quit":
+            app.exit(result=0)
+            return
+        if handled == "ok":
+            refresh()
+            return
+        state["busy"] = True
+        state["activity"] = "working"
+        state["stream"] = ""
+
+        def work() -> None:
+            def on_text(delta: str) -> None:
+                state["stream"] += delta
+                app.loop.call_soon_threadsafe(app.invalidate)
+
+            def on_status(note: str) -> None:
+                state["activity"] = activity_for(note)
+                if note.startswith("tool "):
+                    lines.append(("note", "● " + note[5:]))
+                app.loop.call_soon_threadsafe(app.invalidate)
+
+            def ask_allow(question: str) -> bool:
+                event = threading.Event()
+                pending["event"] = event
+                pending["yes"] = False
+                lines.append(("note", question + "  yes or no"))
+                app.loop.call_soon_threadsafe(app.invalidate)
+                event.wait(timeout=180)
+                return bool(pending["yes"])
+
+            gate = PermissionGate(config.workspace(), ask=ask_allow)
+
+            def spawn_fn(**kwargs):
+                return spawn(client_factory=build_client, **kwargs)
+
+            try:
+                result = run_turn(
+                    text,
+                    config=config,
+                    memory=memory,
+                    session=session,
+                    gate=gate,
+                    spawn_fn=spawn_fn,
+                    on_text=on_text,
+                    on_status=on_status,
+                )
+                shown = state["stream"] or result.text
+                if not state["stream"]:
+                    lines.append(("ghost", shown))
+                else:
+                    lines.append(("ghost", state["stream"]))
+                for check in result.report.checks:
+                    if not check.ok:
+                        lines.append(("note", "✗ " + check.line()))
+            except Exception as exc:
+                lines.append(("note", str(exc)))
+            state["stream"] = ""
+            state["activity"] = "idle"
+            state["busy"] = False
+            status.set("ready")
+            app.loop.call_soon_threadsafe(app.invalidate)
+
+        asyncio.get_running_loop().run_in_executor(None, work)
+
+    bindings = KeyBindings()
+
+    @bindings.add("enter")
+    def _enter(event) -> None:
+        submit()
+
+    @bindings.add("escape", "enter")
+    def _newline(event) -> None:
+        event.current_buffer.insert_text("\n")
+
+    @bindings.add("c-c")
+    def _cancel(event) -> None:
+        if state["busy"]:
+            state["activity"] = "idle"
+            lines.append(("note", "cancelled"))
+            return
+        app.exit(result=0)
+
+    @bindings.add("c-d")
+    def _quit(event) -> None:
+        app.exit(result=0)
+
+    async def animate() -> None:
+        while True:
+            await asyncio.sleep(0.18)
+            if state["activity"] != "idle":
+                state["tick"] += 1
+                app.invalidate()
+
+    from prompt_toolkit.widgets import Frame
+
+    ghost = Window(
+        content=FormattedTextControl(ghost_fragments),
+        width=chrome["ghost_width"] + 1,
+        style="class:side",
+    )
+    chat = Window(
+        content=FormattedTextControl(chat_fragments),
+        wrap_lines=True,
+        right_margins=[ScrollbarMargin()],
+        style="class:chat",
+    )
+    typed = Window(content=BufferControl(buffer=buffer), height=1, style="class:composer")
+    composer = Frame(typed, style="class:box")
+    where = str(config.workspace())
+    status_bar = Window(
+        content=FormattedTextControl(
+            lambda: [
+                ("class:chip", f" {where} "),
+                ("", "  "),
+                ("class:chip", " session open "),
+                ("", "  "),
+                ("class:chip", f" {config.model} "),
+            ]
+        ),
+        height=1,
+        style="class:statusline",
+    )
+    left = HSplit([chat, composer, status_bar])
+    layout = Layout(VSplit([left, ghost]))
+    app = Application(
+        layout=layout,
+        key_bindings=bindings,
+        style=Style.from_dict(
+            {
+                "chat": "bg:#000000 #d6d6d6",
+                "side": "bg:#000000",
+                "composer": "bg:#000000 #d6d6d6",
+                "box": "bg:#000000 #4a4a4a",
+                "statusline": "bg:#000000",
+                "chip": "bg:#2a2a2a #c8c8c8",
+            }
+        ),
+        full_screen=True,
+        mouse_support=True,
+    )
+
+    async def startup() -> None:
+        asyncio.create_task(animate())
+
+    app.pre_run_callables.append(startup)
+    app.layout.focus(typed)
+    try:
+        app.run()
+    finally:
+        desk.stop()
+        memory.close()
+    return 0
+
+
 def run_tui(
     config: Config,
     *,
@@ -346,18 +613,38 @@ def run_tui(
     interactive = prompter is None and sys.stdin.isatty()
     if setup_first is None:
         setup_first = needs_setup(config) and interactive
-    if setup_first:
+    if interactive:
+        screen = None
         try:
-            from ghost_desk.cli import play_boot
+            from ghost_desk.boot import BootScreen
 
-            number = play_boot(True)
-            config = setup_interactive(cfg=config, boot_choice=number)
+            screen = BootScreen()
+            screen.enter()
+            signed = bool(config.provider or config.model) and not needs_setup(config)
+            screen.play_checks(signed=signed)
+            if setup_first or needs_setup(config):
+                number = screen.choose()
+                config = setup_interactive(
+                    cfg=config,
+                    boot_choice=number,
+                    input_fn=screen.ask,
+                    output_fn=screen.log,
+                )
+                screen.log("brain locked")
+                screen.log("ready")
+            else:
+                screen.log((config.provider or "brain") + "  " + (config.model or ""))
+                screen.log("session open")
+            time.sleep(0.3)
         except SetupError as exc:
             console.print(str(exc))
             return 2
         except (EOFError, KeyboardInterrupt):
             console.print("setup did not finish")
             return 2
+        finally:
+            if screen is not None:
+                screen.leave()
     from ghost_desk.context import ensure_soul
 
     ensure_soul(config.data_path())
@@ -373,6 +660,8 @@ def run_tui(
             session.id = previous
             session.history = history
     status = Status()
+    if prompter is None and sys.stdin.isatty():
+        return _run_chat(config, console, memory, session, skills_root, status)
     ask = prompter or default_prompter(status, config.data_path())
     if config.workspace() == Path.home():
         console.print("Workspace is your home directory. Start Ghost Desk inside a project folder.")
