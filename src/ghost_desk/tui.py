@@ -21,6 +21,7 @@ from ghost_desk.permissions import PermissionGate
 from ghost_desk.agent import PERSONALITIES
 from ghost_desk.skills import ensure_skills, load_child, load_parents, render_index
 from ghost_desk.subagents import spawn
+from ghost_desk.tools import schemas
 
 def session_chrome() -> dict:
     from ghost_desk.face import SESSION_HEIGHT, SESSION_WIDTH
@@ -408,6 +409,15 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     def chat_fragments():
         fragments: list[tuple[str, str]] = []
+        if not lines and not state["stream"] and not state["busy"]:
+            fragments.extend(
+                [
+                    ("class:muted", "\n"),
+                    ("class:reply", "Welcome to Ghost Desk. Type a message or /help.\n"),
+                    ("class:muted", "Reads stay local. Writes wait for a yes.\n"),
+                ]
+            )
+            return fragments
         for role, text in lines:
             if role == "you":
                 fragments.append(("class:user", "❯  " + text + "\n"))
@@ -575,13 +585,28 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         right_margins=[ScrollbarMargin()],
         style="class:chat",
     )
+    n_tools = len(schemas(include_ghost=True))
+    skill_names = " · ".join(item.name for item in load_parents(skills_root)[:5]) or "desk"
+
+    def meter_fragments():
+        if state["busy"]:
+            elapsed = max(0, int(time.monotonic() - state["started"]))
+            phase = {"searching": "searching", "reading": "reading", "working": "working"}.get(
+                state["activity"], "thinking"
+            )
+            right = f"{phase} {elapsed}s"
+        else:
+            right = "idle"
+        return [
+            ("class:muted", f" {config.model or 'brain'}  ·  {right}"),
+        ]
+
     header = Window(
         height=1,
         content=FormattedTextControl(
             lambda: [
                 ("class:brand", " GHOST DESK "),
-                ("class:muted", " · "),
-                ("class:muted", config.model or "brain"),
+                ("class:muted", f" ·  {n_tools} tools  ·  {skill_names}  ·  /help"),
             ]
         ),
         style="class:header",
@@ -609,7 +634,9 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         ),
         style="class:footer",
     )
-    left = HSplit([header, chat, composer, footer])
+    meter = Window(height=1, content=FormattedTextControl(meter_fragments), style="class:meter")
+    rule = Window(height=1, char="─", style="class:rule")
+    left = HSplit([header, chat, meter, rule, composer, footer])
     layout = Layout(VSplit([left, ghost]))
     app = Application(
         layout=layout,
@@ -620,6 +647,8 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 "side": "bg:#0c0c0c",
                 "header": "bg:#0c0c0c",
                 "footer": "bg:#0c0c0c",
+                "meter": "bg:#0c0c0c",
+                "rule": "bg:#0c0c0c #2a2a2a",
                 "composer": "bg:#141414 #eeeeee",
                 "prompt": "bg:#141414 #8a8a8a",
                 "brand": "bold #d6d6d6",
