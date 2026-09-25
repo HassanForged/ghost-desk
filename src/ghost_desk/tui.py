@@ -412,9 +412,9 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         if not lines and not state["stream"] and not state["busy"]:
             fragments.extend(
                 [
-                    ("class:muted", "\n"),
-                    ("class:reply", "Welcome to Ghost Desk. Type a message or /help.\n"),
-                    ("class:muted", "Reads stay local. Writes wait for a yes.\n"),
+                    ("class:muted", "\n\n"),
+                    ("class:reply", "Welcome to Ghost Desk.\n"),
+                    ("class:muted", "Type a message or /help. Reads stay local. Writes wait for a yes.\n"),
                 ]
             )
             return fragments
@@ -442,15 +442,11 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     chrome = session_chrome()
 
     def ghost_fragments():
-        bob = state["tick"] % 3 if state["activity"] != "idle" else 0
-        rows = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=bob)
+        rows = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=0)
         fragments: list[tuple[str, str]] = []
         for row in rows:
             fragments.extend(row)
             fragments.append(("", "\n"))
-        label = {"searching": "searching", "reading": "reading", "working": "working"}.get(state["activity"], "")
-        if label:
-            fragments.append(("fg:#8a8a8a", label + ("." * (state["tick"] % 4)) + "\n"))
         return fragments
 
     buffer = Buffer(multiline=True)
@@ -568,8 +564,8 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     async def animate() -> None:
         while True:
-            await asyncio.sleep(0.18)
-            if state["activity"] != "idle":
+            await asyncio.sleep(0.25)
+            if state["busy"]:
                 state["tick"] += 1
                 app.invalidate()
 
@@ -643,21 +639,21 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         key_bindings=bindings,
         style=Style.from_dict(
             {
-                "chat": "bg:#0c0c0c #c8c8c8",
-                "side": "bg:#0c0c0c",
-                "header": "bg:#0c0c0c",
-                "footer": "bg:#0c0c0c",
-                "meter": "bg:#0c0c0c",
-                "rule": "bg:#0c0c0c #2a2a2a",
-                "composer": "bg:#141414 #eeeeee",
-                "prompt": "bg:#141414 #8a8a8a",
-                "brand": "bold #d6d6d6",
-                "user": "bold #eeeeee",
-                "reply": "#c8c8c8",
-                "tool": "#6e6e6e",
-                "ask": "#d6d6d6",
-                "muted": "#6e6e6e",
-                "status": "#8a8a8a italic",
+                "chat": "bg:#090909 #d4d4d4",
+                "side": "bg:#090909",
+                "header": "bg:#090909",
+                "footer": "bg:#090909",
+                "meter": "bg:#090909",
+                "rule": "bg:#090909 #333333",
+                "composer": "bg:#161616 #f0f0f0",
+                "prompt": "bg:#161616 #9a9a9a",
+                "brand": "bold #ececec",
+                "user": "bold #f4f4f4",
+                "reply": "#d4d4d4",
+                "tool": "#8a8a8a",
+                "ask": "#e6e6e6",
+                "muted": "#7a7a7a",
+                "status": "#9a9a9a italic",
             }
         ),
         full_screen=True,
@@ -711,7 +707,7 @@ def run_tui(
             else:
                 screen.log((config.provider or "brain") + "  " + (config.model or ""))
                 screen.log("session open")
-            time.sleep(0.3)
+            time.sleep(0.08)
         except SetupError as exc:
             console.print(str(exc))
             return 2

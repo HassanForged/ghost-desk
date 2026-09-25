@@ -8,9 +8,11 @@ HOOD = Path(__file__).resolve().parent / "assets" / "hood.jpg"
 
 BOOT_WIDTH = 36
 BOOT_HEIGHT = 32
-SESSION_WIDTH = 22
-SESSION_HEIGHT = 26
+SESSION_WIDTH = 24
+SESSION_HEIGHT = 28
 _BLACK = 16
+_BLOCK_CACHE: dict[tuple, list] = {}
+_ANSI_CACHE: dict[tuple, list[str]] = {}
 
 
 def activity_for(note: str) -> str:
@@ -74,6 +76,10 @@ def _cell(top: tuple[int, int, int], bottom: tuple[int, int, int]) -> tuple[str,
 def render_blocks(path: Path | None = None, *, width: int = 22, height: int = 26, bob: int = 0):
     """Truecolor half-blocks from the photo. Bob is a blank row shift, not a new drawing."""
     source = path or HOOD
+    key = (str(source), width, height, bob)
+    cached = _BLOCK_CACHE.get(key)
+    if cached is not None:
+        return cached
     if not source.is_file():
         return [[("fg:#8a8a8a", "ghost")]]
     image = _load(source, width, height)
@@ -89,12 +95,17 @@ def render_blocks(path: Path | None = None, *, width: int = 22, height: int = 26
             bottom = pixels[x, min(y + 1, height * 2 - 1)]
             line.append(_cell(top, bottom))
         rows.append(line)
+    _BLOCK_CACHE[key] = rows
     return rows
 
 
 def render_ansi(path: Path | None = None, *, width: int = BOOT_WIDTH, height: int = BOOT_HEIGHT) -> list[str]:
     """Same photo as ANSI truecolor rows for the boot screen."""
     source = path or HOOD
+    key = (str(source), width, height)
+    cached = _ANSI_CACHE.get(key)
+    if cached is not None:
+        return cached
     if not source.is_file():
         return ["ghost"]
     image = _load(source, width, height)
@@ -114,4 +125,5 @@ def render_ansi(path: Path | None = None, *, width: int = BOOT_WIDTH, height: in
                 f"\033[48;2;{bottom[0]};{bottom[1]};{bottom[2]}m▄"
             )
         rows.append("".join(parts) + reset)
+    _ANSI_CACHE[key] = rows
     return rows

@@ -65,12 +65,12 @@ def _paint(left: list[str], level: int = 4, cursor: bool = False) -> None:
 
 
 def _dots(left: list[str], level: int, stem: str) -> None:
-    for n in range(1, 5):
+    for n in range(1, 3):
         _paint(left + [stem + "." * n], level, True)
-        time.sleep(0.07)
+        time.sleep(0.04)
 
 
-def _line(left: list[str], level: int, stem: str, done: str, pause: float = 0.18) -> list[str]:
+def _line(left: list[str], level: int, stem: str, done: str, pause: float = 0.05) -> list[str]:
     _dots(left, level, stem)
     left = left + [stem + done]
     _paint(left, level, True)
@@ -117,7 +117,7 @@ def _read_line() -> str:
 def _type_title(left: list[str], level: int, title: str) -> list[str]:
     for count in range(1, len(title) + 1):
         _paint(left + [title[:count]], level, True)
-        time.sleep(0.022)
+        time.sleep(0.012)
     return left + [title]
 
 
@@ -164,7 +164,7 @@ def _choose(left: list[str]) -> str:
         if key in {"1", "2", "3", "4", "5"}:
             locked = frame + ["", "brain locked"]
             _paint(locked, 4, False)
-            time.sleep(0.35)
+            time.sleep(0.12)
             _paint(locked + ["ready"], 4, False)
             return key
 
@@ -187,6 +187,20 @@ class BootScreen:
         self._armed = False
 
     def play_checks(self, *, signed: bool = False) -> None:
+        if signed:
+            self.left = [
+                "GHOST DESK",
+                "waking local harness ready",
+                "checking this pc ok",
+                "memory on disk",
+                "skills loaded",
+                "provider signed",
+                "sessions kept",
+                "handoffs kept",
+            ]
+            _paint(self.left, 4, False)
+            time.sleep(0.12)
+            return
         self.left = []
         self.left = _type_title(self.left, 0, "GHOST DESK")
         steps = (
@@ -245,7 +259,7 @@ def run_boot(skip_to_menu: bool = False, choose: bool = True, signed: bool = Fal
             screen.play_checks(signed=signed)
         if not choose:
             screen.log("session open")
-            time.sleep(0.35)
+            time.sleep(0.12)
             return ""
         return screen.choose()
     finally:
