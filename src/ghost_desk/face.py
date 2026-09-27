@@ -1101,39 +1101,32 @@ def confetti_fragments(
 # face geometry, since the portrait's anchors crowd and merge at icon size.
 # Only eye cells ever differ between life frames.
 
-BUDDY_W = 16
-BUDDY_H = 12
-BUDDY_ROWS = 6  # half-block fragment rows
+BUDDY_W = 10
+BUDDY_H = 10
+BUDDY_ROWS = 5  # half-block fragment rows
 
-# Buddy face anchors: fractions of the buddy body bbox, matching the
-# hand-authored sprite below. Worried 3x3 eyes, right higher for the
-# up-right gaze; the open screaming mouth sits well below them.
-# (bbox of the art: x 1-14, y 0-11 -> 14x12; left eye center (5,5),
-# right eye center (10,4), mouth interior center (7.5,8.5).)
-_BUDDY_EYE_L = (4 / 14, 5 / 12)
-_BUDDY_EYE_R = (9 / 14, 4 / 12)
-_BUDDY_MOUTH = (6.5 / 14, 8.5 / 12)
-_BUDDY_EYE_SIZE = (3 / 14, 3 / 12)
-_BUDDY_MOUTH_SIZE = (5 / 14, 4 / 12)
+# Buddy face anchors: fractions of the 10x10 mark bbox.
+# Two dot eyes at (3,3)-(3,4) and (6,3)-(6,4). Minimal mark, no mouth.
+_BUDDY_EYE_L = (0.3, 0.35)
+_BUDDY_EYE_R = (0.6, 0.35)
+_BUDDY_MOUTH = (0.5, 0.75)  # unused (no mouth), kept for API compat
+_BUDDY_EYE_SIZE = (0.1, 0.2)
+_BUDDY_MOUTH_SIZE = (0.2, 0.2)
 
-# Hand-authored buddy sprite, 16x12. X = black outline, # = white body,
-# G = gray screaming-mouth interior. Derived-from-reference bodies turn to
-# lumpy noise at this size, and the stamped face merged into the outline;
-# chunky hand pixels read as the spooked ghost instead. Flat white (no
-# dither) so it stays clean at icon scale.
+# Tiny header mark: 10x10 minimal ghost. White silhouette, two dot eyes,
+# wavy bottom. Does NOT try to replicate the reference — that's the boot
+# screen's job. This is just a clean lowkey mark.
 _BUDDY_ART = [
-    "      XXXX      ",
-    "    XX####XX    ",
-    "   X########X   ",
-    "  X######XXX#X  ",
-    " X##XXX##XXX##X ",
-    " X##XXX##XXX##X ",
-    " X##XXX#######X ",
-    " X####XXXX####X ",
-    " X####XGGX####X ",
-    " X####XGGX####X ",
-    "  X###XXXX###X  ",
-    "   XX######XX   ",
+    "  XXXXXX  ",
+    " X######X ",
+    "X########X",
+    "X##X##X##X",
+    "X##X##X##X",
+    "X########X",
+    "X########X",
+    "X########X",
+    "X#X#X#X#XX",
+    "XXXXXXXXXX",
 ]
 
 _BUDDY_CACHE: list[list[int]] | None = None

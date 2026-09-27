@@ -272,7 +272,6 @@ def test_buddy_face_geometry():
     from ghost_desk.face import (
         _BUDDY_EYE_L,
         _BUDDY_EYE_R,
-        _BUDDY_MOUTH,
         BUDDY_H,
         BUDDY_W,
         buddy_frame,
@@ -282,27 +281,14 @@ def test_buddy_face_geometry():
     assert len(grid) == BUDDY_H and len(grid[0]) == BUDDY_W
     x0, y0, x1, y1 = _sprite_bbox(grid)
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
-    # Eye anchor centers are black; the right eye sits higher (up-right gaze).
+    # Eye anchor centers are black. Minimal mark: eyes level, no mouth.
     lx, ly = int(round(x0 + _BUDDY_EYE_L[0] * bw)), int(round(y0 + _BUDDY_EYE_L[1] * bh))
     rx, ry = int(round(x0 + _BUDDY_EYE_R[0] * bw)), int(round(y0 + _BUDDY_EYE_R[1] * bh))
     assert grid[ly][lx] == T_BLACK, (lx, ly)
     assert grid[ry][rx] == T_BLACK, (rx, ry)
-    assert ry < ly, "right eye must sit higher than the left"
-    # Mouth center is gray; the gray interior is one connected component.
-    mx, my = int(round(x0 + _BUDDY_MOUTH[0] * bw)), int(round(y0 + _BUDDY_MOUTH[1] * bh))
-    assert grid[my][mx] == T_GRAY, (mx, my)
+    # No gray (no mouth) in the minimal mark.
     gray = {(x, y) for y in range(BUDDY_H) for x in range(BUDDY_W) if grid[y][x] == T_GRAY}
-    assert gray, "mouth must have a gray interior"
-    seen, stack = set(), [next(iter(gray))]
-    while stack:
-        x, y = stack.pop()
-        if (x, y) in seen:
-            continue
-        seen.add((x, y))
-        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
-            if (nx, ny) in gray and (nx, ny) not in seen:
-                stack.append((nx, ny))
-    assert seen == gray, "gray mouth interior must be one region"
+    assert not gray, "minimal mark has no mouth"
 
 
 def test_buddy_frames_only_touch_eyes():

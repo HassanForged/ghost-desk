@@ -105,8 +105,8 @@ def test_header_line_drops_meter_when_narrow():
 def test_buddy_is_compact():
     from ghost_desk.face import BUDDY_ROWS, BUDDY_W, buddy_frame, fragments_from_grid
 
-    assert BUDDY_W == 16
-    assert BUDDY_ROWS == 6
+    assert BUDDY_W == 10
+    assert BUDDY_ROWS == 5
     rows = fragments_from_grid(buddy_frame("neutral"))
     assert len(rows) == BUDDY_ROWS
     assert all(len(r) == BUDDY_W for r in rows)
@@ -120,7 +120,7 @@ def test_buddy_eye_frames_only_touch_eyes():
         frame = buddy_frame(name)
         diff = [(x, y) for y in range(BUDDY_H) for x in range(BUDDY_W) if frame[y][x] != base[y][x]]
         assert diff, name
-        boxes = [(3, 3, 7, 7), (8, 2, 12, 6)]  # eye boxes, ±1 for look shifts
+        boxes = [(2, 2, 4, 5), (5, 2, 7, 5)]  # eye boxes, ±1 for look shifts
         assert all(
             any(x0 <= x <= x1 and y0 <= y <= y1 for x0, y0, x1, y1 in boxes) for x, y in diff
         ), name
