@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import random
 from pathlib import Path
 
@@ -335,7 +336,18 @@ def _paint_ring(
             grid[y][x] = tone if edge else fill
 
 
-def _stamp_features(grid: list[list[int]]) -> list[list[int]]:
+def _stamp_features(
+    grid: list[list[int]],
+    *,
+    eye_l: tuple[float, float] = _EYE_L,
+    eye_r: tuple[float, float] = _EYE_R,
+    mouth: tuple[float, float] = _MOUTH,
+    eye_size: tuple[float, float] = _EYE_SIZE,
+    mouth_size: tuple[float, float] = _MOUTH_SIZE,
+    eye_min: tuple[float, float] = (2.0, 3.0),
+    mouth_min: tuple[float, float] = (4.0, 4.0),
+    shade: bool = True,
+) -> list[list[int]]:
     """Stamp the reference's face: two oval eyes and the open screaming mouth.
 
     The face is 100% stamped vector art positioned on the sprite's own
@@ -345,6 +357,9 @@ def _stamp_features(grid: list[list[int]]) -> list[list[int]]:
     gaze); the mouth is a black oval ring with the reference's flat
     light-gray interior. A whisper of lilac side-shading goes on first
     so the stamps sit on top of it.
+
+    Anchor/size overrides let the buddy reuse the same technique at icon
+    scale with its own face geometry.
     """
     height = len(grid)
     width = len(grid[0]) if height else 0
@@ -352,24 +367,48 @@ def _stamp_features(grid: list[list[int]]) -> list[list[int]]:
     x0, y0, x1, y1 = _sprite_bbox(out)
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
 
-    # 90s side-shading: lilac on the body's right flank, dithered later.
-    # Kept clear of the face (starts right of the mouth) so it never
-    # reads as a stray mark.
-    for y in range(y0, y1 + 1):
-        for x in range(x0, x1 + 1):
-            if out[y][x] == T_WHITE and x >= x0 + bw * 0.84:
-                out[y][x] = T_LILAC
+    if shade:
+        # 90s side-shading: lilac on the body's right flank, dithered later.
+        # Kept clear of the face (starts right of the mouth) so it never
+        # reads as a stray mark.
+        for y in range(y0, y1 + 1):
+            for x in range(x0, x1 + 1):
+                if out[y][x] == T_WHITE and x >= x0 + bw * 0.84:
+                    out[y][x] = T_LILAC
 
     # Oval eyes, solid black. Asymmetric heights sell the up-right gaze.
-    ew, eh = max(2.0, _EYE_SIZE[0] * bw), max(3.0, _EYE_SIZE[1] * bh)
-    for fx, fy in (_EYE_L, _EYE_R):
+    ew, eh = max(eye_min[0], eye_size[0] * bw), max(eye_min[1], eye_size[1] * bh)
+    for fx, fy in (eye_l, eye_r):
         _paint_ellipse(out, x0 + fx * bw, y0 + fy * bh, ew / 2, eh / 2, T_BLACK)
     # The open screaming mouth: black oval ring, flat gray interior.
-    mw, mh = max(4.0, _MOUTH_SIZE[0] * bw), max(4.0, _MOUTH_SIZE[1] * bh)
+    mw, mh = max(mouth_min[0], mouth_size[0] * bw), max(mouth_min[1], mouth_size[1] * bh)
     _paint_ring(
-        out, x0 + _MOUTH[0] * bw, y0 + _MOUTH[1] * bh, mw / 2, mh / 2, T_BLACK, T_GRAY
+        out, x0 + mouth[0] * bw, y0 + mouth[1] * bh, mw / 2, mh / 2, T_BLACK, T_GRAY
     )
     return out
+
+
+def _outline_grid(grid: list[list[int]]) -> list[list[int]]:
+    """Clean 1px outline: any filled cell adjacent to transparency goes black.
+
+    Shared by the portrait derivation and the buddy (which re-outlines
+    after cropping the natural-aspect body to its exact box).
+    """
+    work_h = len(grid)
+    work_w = len(grid[0]) if work_h else 0
+    for y in range(work_h):
+        for x in range(work_w):
+            if grid[y][x] == T_NONE:
+                continue
+            for dy in (-1, 0, 1):
+                for dx in (-1, 0, 1):
+                    ny, nx = y + dy, x + dx
+                    if 0 <= ny < work_h and 0 <= nx < work_w and grid[ny][nx] == T_NONE:
+                        grid[y][x] = T_BLACK
+                        break
+                if grid[y][x] == T_BLACK:
+                    break
+    return grid
 
 
 def _largest_component(mask: list[list[bool]]) -> list[list[bool]]:
@@ -405,20 +444,27 @@ def _largest_component(mask: list[list[bool]]) -> list[list[bool]]:
     return out
 
 
-def _derive_big(work_w: int) -> list[list[int]]:
+def _derive_big(
+    work_w: int, work_h: int | None = None, stamp: bool = True
+) -> list[list[int]]:
     """Derive the ghost at working resolution.
 
     The body mask comes from the reference via flood fill (dark-gray
     backdrop goes transparent). Side arm protrusions are carved off — at
     sprite scale they blob under the outline — and the thin tail is
     dilated so it survives outlining with a white interior.
+
+    work_h defaults to the reference body's aspect; pass it explicitly
+    (with stamp=False) to derive an unstamped body at an exact size —
+    the buddy's path.
     """
     Image = _pil_image()
     image = Image.open(GHOST_REF).convert("RGB")
     bx0, by0, bx1, by1 = _body_bbox(image)
     body = image.crop((bx0, by0, bx1, by1))
     bw, bh = body.size
-    work_h = max(8, round(work_w * bh / bw))
+    if work_h is None:
+        work_h = max(8, round(work_w * bh / bw))
     gray = body.convert("L")
     gpx = gray.load()
     backdrop = [[False] * bw for _ in range(bh)]
@@ -494,24 +540,15 @@ def _derive_big(work_w: int) -> list[list[int]]:
         for y in range(work_h)
     ]
     # Clean 1px outline.
-    for y in range(work_h):
-        for x in range(work_w):
-            if grid[y][x] == T_NONE:
-                continue
-            for dy in (-1, 0, 1):
-                for dx in (-1, 0, 1):
-                    ny, nx = y + dy, x + dx
-                    if 0 <= ny < work_h and 0 <= nx < work_w and grid[ny][nx] == T_NONE:
-                        grid[y][x] = T_BLACK
-                        break
-                if grid[y][x] == T_BLACK:
-                    break
+    _outline_grid(grid)
     # Guarantee: the interior is pure white before stamping. The face is
     # 100% stamped vector art — zero downscaled residuals can survive.
     for y in range(work_h):
         for x in range(work_w):
             if grid[y][x] not in (T_NONE, T_BLACK):
                 grid[y][x] = T_WHITE
+    if not stamp:
+        return grid
     return _stamp_features(grid)
 
 
@@ -539,16 +576,31 @@ def derive_sprite(width: int = 22) -> list[list[int]]:
     return grid
 
 
-def _stamped_eye_boxes(grid: list[list[int]]) -> list[tuple[int, int, int, int]]:
-    """Eye bounding boxes from the stamp anchors: exact, no detection needed."""
+def _stamped_eye_boxes(
+    grid: list[list[int]],
+    *,
+    eye_l: tuple[float, float] = _EYE_L,
+    eye_r: tuple[float, float] = _EYE_R,
+    eye_size: tuple[float, float] = _EYE_SIZE,
+) -> list[tuple[int, int, int, int]]:
+    """Eye bounding boxes from the stamp anchors: exact, no detection needed.
+
+    Tight to the painted ellipse (ceil/floor of the true extent) so frame
+    animation never touches the mouth or outline.
+    """
     x0, y0, x1, y1 = _sprite_bbox(grid)
     bw, bh = x1 - x0 + 1, y1 - y0 + 1
-    ew, eh = max(2.0, _EYE_SIZE[0] * bw), max(3.0, _EYE_SIZE[1] * bh)
+    ew, eh = max(2.0, eye_size[0] * bw), max(3.0, eye_size[1] * bh)
     boxes = []
-    for fx, fy in (_EYE_L, _EYE_R):
+    for fx, fy in (eye_l, eye_r):
         cx, cy = x0 + fx * bw, y0 + fy * bh
         boxes.append(
-            (round(cx - ew / 2), round(cy - eh / 2), round(cx + ew / 2), round(cy + eh / 2))
+            (
+                math.ceil(cx - ew / 2 - 1e-9),
+                math.ceil(cy - eh / 2 - 1e-9),
+                math.floor(cx + ew / 2 + 1e-9),
+                math.floor(cy + eh / 2 + 1e-9),
+            )
         )
     boxes.sort(key=lambda b: b[0])
     return boxes
@@ -561,19 +613,22 @@ def _clear_eyes(grid: list[list[int]], boxes) -> None:
                 grid[y][x] = T_WHITE
 
 
-def frame_grid(name: str = "neutral", width: int = 22) -> list[list[int]]:
-    """One animation frame of the ghost. Only the eyes ever change.
+def _apply_frame(
+    base: list[list[int]],
+    name: str,
+    *,
+    eye_l: tuple[float, float] = _EYE_L,
+    eye_r: tuple[float, float] = _EYE_R,
+    eye_size: tuple[float, float] = _EYE_SIZE,
+) -> list[list[int]]:
+    """One animation frame of a stamped ghost. Only the eyes ever change.
 
-    Frames: neutral, blink, look_left, look_right, look_down, glance_meter
-    (eyes flick up toward the context bar), sleep (eyes shut).
+    Shared by the portrait (frame_grid) and the buddy (buddy_frame).
     """
-    base = derive_sprite(width)
-    if name in (None, "neutral"):
-        return base
     grid = [row[:] for row in base]
     height = len(grid)
     gwidth = len(grid[0]) if height else 0
-    boxes = _stamped_eye_boxes(grid)
+    boxes = _stamped_eye_boxes(grid, eye_l=eye_l, eye_r=eye_r, eye_size=eye_size)
     if name in ("blink", "sleep"):
         _clear_eyes(grid, boxes)
         for x0, y0, x1, y1 in boxes:
@@ -603,6 +658,18 @@ def frame_grid(name: str = "neutral", width: int = 22) -> list[list[int]]:
             if 0 <= nx < gwidth and 0 <= ny < height and grid[ny][nx] not in (T_NONE, T_GRAY):
                 grid[ny][nx] = tone
     return grid
+
+
+def frame_grid(name: str = "neutral", width: int = 22) -> list[list[int]]:
+    """One animation frame of the ghost. Only the eyes ever change.
+
+    Frames: neutral, blink, look_left, look_right, look_down, glance_meter
+    (eyes flick up toward the context bar), sleep (eyes shut).
+    """
+    base = derive_sprite(width)
+    if name in (None, "neutral"):
+        return base
+    return _apply_frame(base, name)
 
 
 def dither_shade(grid: list[list[int]], seed: int = 0) -> list[list[int]]:
@@ -1024,3 +1091,66 @@ def confetti_fragments(
         color = rng.choice(colors)
         out.append((x, y, [[(f"fg:{color}", "•")]]))
     return out
+
+
+# --- compact buddy sprite ---------------------------------------------------
+# The buddy: the same reference-derived ghost as the portrait, re-derived
+# at exactly 16x12 for the full-width header dock. Same technique as the
+# portrait (commit 4ab6d30): body mask from ghost-ref.png, interior cleared
+# to white, face stamped as bbox-relative vector art — but with buddy-scale
+# face geometry, since the portrait's anchors crowd and merge at icon size.
+# Only eye cells ever differ between life frames.
+
+BUDDY_W = 16
+BUDDY_H = 12
+BUDDY_ROWS = 6  # half-block fragment rows
+
+# Buddy face anchors: fractions of the buddy body bbox, tuned to read at
+# 16 wide. Worried oval eyes, right higher for the up-right gaze; the open
+# screaming mouth sits well below them with clear air between — at icon
+# scale the portrait's tighter packing merges into one blob.
+_BUDDY_EYE_L = (0.423, 0.5)
+_BUDDY_EYE_R = (0.654, 0.417)
+_BUDDY_MOUTH = (0.577, 0.75)
+_BUDDY_EYE_SIZE = (0.154, 0.25)  # width, height fractions of the body bbox
+_BUDDY_MOUTH_SIZE = (0.308, 0.25)
+
+_BUDDY_CACHE: list[list[int]] | None = None
+
+
+def buddy_grid() -> list[list[int]]:
+    """The buddy as a tone grid: reference body, stamped face. Cached.
+
+    The body derives from the reference at 20 wide, center-crops to the
+    exact 16x12 box and re-outlines for a clean bottom edge. Interior is
+    guaranteed white; the face is 100% stamped vector art at buddy
+    scale — no downscaled residuals ever survive.
+    """
+    global _BUDDY_CACHE
+    if _BUDDY_CACHE is None:
+        # Derive the body at 20 wide, then center-crop to the 16x12 dock.
+        # At 16 wide the head interior is only 6 cells across, which cannot
+        # fit two separated 2-wide eyes with white margins on both sides.
+        full = _derive_big(20, stamp=False)
+        ox = (20 - BUDDY_W) // 2
+        body = _outline_grid([row[ox : ox + BUDDY_W] for row in full[:BUDDY_H]])
+        _BUDDY_CACHE = _stamp_features(
+            body,
+            eye_l=_BUDDY_EYE_L,
+            eye_r=_BUDDY_EYE_R,
+            mouth=_BUDDY_MOUTH,
+            eye_size=_BUDDY_EYE_SIZE,
+            mouth_size=_BUDDY_MOUTH_SIZE,
+            mouth_min=(4.0, 3.0),
+        )
+    return [row[:] for row in _BUDDY_CACHE]
+
+
+def buddy_frame(name: str = "neutral") -> list[list[int]]:
+    """The buddy with a life-state eye transform. Only eye cells ever differ."""
+    base = buddy_grid()
+    if name in (None, "neutral"):
+        return base
+    return _apply_frame(
+        base, name, eye_l=_BUDDY_EYE_L, eye_r=_BUDDY_EYE_R, eye_size=_BUDDY_EYE_SIZE
+    )

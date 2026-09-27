@@ -266,3 +266,73 @@ def test_confetti_fragments_restrained():
     assert 1 <= len(c1) <= 10  # restrained
     for x, y, rows in c1:
         assert 0 <= x < 22 and 0 <= y < 20
+
+
+def test_buddy_face_geometry():
+    from ghost_desk.face import (
+        _BUDDY_EYE_L,
+        _BUDDY_EYE_R,
+        _BUDDY_MOUTH,
+        BUDDY_H,
+        BUDDY_W,
+        buddy_frame,
+    )
+
+    grid = buddy_frame("neutral")
+    assert len(grid) == BUDDY_H and len(grid[0]) == BUDDY_W
+    x0, y0, x1, y1 = _sprite_bbox(grid)
+    bw, bh = x1 - x0 + 1, y1 - y0 + 1
+    # Eye anchor centers are black; the right eye sits higher (up-right gaze).
+    lx, ly = int(round(x0 + _BUDDY_EYE_L[0] * bw)), int(round(y0 + _BUDDY_EYE_L[1] * bh))
+    rx, ry = int(round(x0 + _BUDDY_EYE_R[0] * bw)), int(round(y0 + _BUDDY_EYE_R[1] * bh))
+    assert grid[ly][lx] == T_BLACK, (lx, ly)
+    assert grid[ry][rx] == T_BLACK, (rx, ry)
+    assert ry < ly, "right eye must sit higher than the left"
+    # Mouth center is gray; the gray interior is one connected component.
+    mx, my = int(round(x0 + _BUDDY_MOUTH[0] * bw)), int(round(y0 + _BUDDY_MOUTH[1] * bh))
+    assert grid[my][mx] == T_GRAY, (mx, my)
+    gray = {(x, y) for y in range(BUDDY_H) for x in range(BUDDY_W) if grid[y][x] == T_GRAY}
+    assert gray, "mouth must have a gray interior"
+    seen, stack = set(), [next(iter(gray))]
+    while stack:
+        x, y = stack.pop()
+        if (x, y) in seen:
+            continue
+        seen.add((x, y))
+        for nx, ny in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)):
+            if (nx, ny) in gray and (nx, ny) not in seen:
+                stack.append((nx, ny))
+    assert seen == gray, "gray mouth interior must be one region"
+
+
+def test_buddy_frames_only_touch_eyes():
+    from ghost_desk.face import (
+        _BUDDY_EYE_L,
+        _BUDDY_EYE_R,
+        _BUDDY_EYE_SIZE,
+        BUDDY_H,
+        BUDDY_W,
+        _stamped_eye_boxes,
+        buddy_frame,
+        buddy_grid,
+    )
+
+    base = buddy_frame("neutral")
+    boxes = _stamped_eye_boxes(
+        buddy_grid(), eye_l=_BUDDY_EYE_L, eye_r=_BUDDY_EYE_R, eye_size=_BUDDY_EYE_SIZE
+    )
+    assert boxes, "buddy must have eye boxes"
+    frames = ("blink", "sleep", "look_left", "look_right", "look_down", "glance_meter")
+    for name in frames:
+        frame = buddy_frame(name)
+        diff = [
+            (x, y)
+            for y in range(BUDDY_H)
+            for x in range(BUDDY_W)
+            if frame[y][x] != base[y][x]
+        ]
+        assert diff, name
+        assert all(
+            any(x0 - 1 <= x <= x1 + 1 and y0 - 1 <= y <= y1 + 1 for x0, y0, x1, y1 in boxes)
+            for x, y in diff
+        ), (name, diff)

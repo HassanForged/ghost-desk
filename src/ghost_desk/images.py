@@ -100,8 +100,8 @@ def install_picture(output, protocol: str | None, chrome: dict, busy_fn) -> call
             busy, tick = False, 0
         # iTerm2 has no image delete, so it stays perfectly still.
         bob = (tick % 2) if (busy and protocol == "kitty") else 0
-        row = 2 + bob  # 1-based; below the 1-row header
-        col = max(1, (scols - chrome["ghost_width"]) // 2 + 1)  # centered portrait
+        row = 1 + bob  # 1-based; the buddy lives at the top-left
+        col = 1
         return (row, col, chrome["ghost_height"], chrome["ghost_width"])
 
     def wrapped() -> None:

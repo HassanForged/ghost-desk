@@ -71,8 +71,8 @@ class ContextHealth:
             return 0.0
         return min(1.0, max(0.0, self.used_tokens / limit))
 
-    def block_colors(self) -> list[str]:
-        """Twenty block colors for the meter: lilac/amber/red by threshold."""
+    def block_colors(self, n: int = BLOCKS) -> list[str]:
+        """Block colors for the meter: lilac/amber/red by threshold."""
         ratio = self.ratio
         if ratio >= WARN_AT:
             color = RED
@@ -80,9 +80,9 @@ class ContextHealth:
             color = AMBER
         else:
             color = LILAC
-        filled = int(ratio * BLOCKS)
+        filled = int(ratio * n)
         # Filled blocks get the threshold color; the rest stay dim.
-        return [color if i < filled else "#2e2133" for i in range(BLOCKS)]
+        return [color if i < filled else "#2e2133" for i in range(n)]
 
     def add_turn(self, reported_tokens: int | None = None, text: str = "") -> None:
         """Record a turn's token use: reported count wins, else chars/4."""

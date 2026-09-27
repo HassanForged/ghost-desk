@@ -46,17 +46,47 @@ ACCESS_ON = (
 )
 
 
+def header_line(
+    *,
+    busy: bool,
+    phase: str = "thinking",
+    elapsed: int = 0,
+    full_access: bool = False,
+    meter_colors: tuple = (),
+    model: str = "",
+    width: int = 80,
+) -> list[tuple[str, str]]:
+    """Row-0 header text cells: `ghost desk · <status>` left, meter + model right.
+
+    The buddy occupies the first 16 columns plus a 2-column gutter. When the
+    terminal is too narrow for the right side, the meter is dropped rather
+    than wrapping.
+    """
+    status_txt = header_status(busy=busy, phase=phase, elapsed=elapsed, full_access=full_access)
+    left_len = len("ghost desk · " + status_txt)
+    right_len = len(meter_colors) + 2 + len(model)
+    cells: list[tuple[str, str]] = [("class:brand", "ghost desk"), ("class:muted", f" · {status_txt}")]
+    gap = width - 18 - left_len - right_len
+    if meter_colors and gap >= 1:
+        cells.append(("", " " * gap))
+        cells += [(f"fg:{color}", "█") for color in meter_colors]
+        cells.append(("class:muted", f"  {model}"))
+    return cells
+
+
 def session_chrome() -> dict:
-    # Pi-like: one centered column, small ghost up top, no side pane.
+    # Full-width terminal-native layout: a compact buddy docked top-left,
+    # chat and input spanning the terminal. No centered column, no margins.
     return {
-        "col_width": 76,
-        "ghost_width": 22,
-        "ghost_height": 11,
+        "fullwidth": True,
+        "buddy_width": 16,
+        "buddy_rows": 6,
+        "ghost_width": 16,  # picture-protocol region follows the buddy
+        "ghost_height": 6,
         "header": True,
     }
 
 
-COL_W = 76
 CHIPS = ["plan my day", "explain something", "draft a message"]
 
 
@@ -71,21 +101,15 @@ def _greeting() -> str:
     return "Good evening."
 
 
-def _bubble(text: str, width: int = COL_W) -> list[tuple[str, str]]:
-    """A right-aligned rounded bubble, Pi-style, for the user's messages."""
+def _you_fragments(text: str, width: int) -> list[tuple[str, str]]:
+    """The user's message as plain full-width lines: `› ` prefix, wrapped."""
     import textwrap
 
-    inner = textwrap.wrap(text, min(48, width - 8)) or [""]
-    content_w = max(len(line) for line in inner)
-    bar = "─" * (content_w + 2)
-    box = ["╭" + bar + "╮"]
-    box += ["│ " + line.ljust(content_w) + " │" for line in inner]
-    box.append("╰" + bar + "╯")
-    box_w = content_w + 4
+    wrapped = textwrap.wrap(text, max(20, width - 4)) or [""]
     fragments: list[tuple[str, str]] = []
-    for line in box:
-        fragments.append(("", " " * (width - box_w)))
-        fragments.append(("class:bubble", line + "\n"))
+    for i, line in enumerate(wrapped):
+        fragments.append(("class:prompt", "› " if i == 0 else "  "))
+        fragments.append(("", line + "\n"))
     fragments.append(("", "\n"))
     return fragments
 
@@ -509,55 +533,40 @@ def _stitch_bar(frame: int, width: int) -> list[tuple[str, str]]:
     return [("class:upbar", "█" * filled), ("class:muted", "░" * (width - filled))]
 
 
-def _update_ghost_fragments(seq: UpdateSequence, width: int, height: int, pad: str):
-    """Ghost-pane frames for the /update show: dissolve, stitch, re-materialize.
+def _update_buddy_rows(seq: UpdateSequence) -> list[list[tuple[str, str]]]:
+    """Buddy-sized frames for the /update show: dissolve, stitch, re-materialize.
 
-    Uses the reference-derived sprite with deterministic materialization
-    steps: the dissolve runs the materialization backwards, the
-    rematerialize runs it forwards.
+    Deterministic materialization steps on the buddy grid: the dissolve runs
+    the steps backwards, the rematerialize runs them forwards. During the
+    stitch phase the bottom row becomes the shimmering pixel bar; the header
+    text shows the stitching label.
     """
     from ghost_desk.face import (
+        BUDDY_ROWS,
+        BUDDY_W,
+        buddy_grid,
         dither_shade,
         fragments_from_grid,
-        frame_grid,
         materialize_steps,
     )
 
-    grid = dither_shade(frame_grid("neutral", width=22))
+    grid = dither_shade(buddy_grid())
     steps = materialize_steps(grid, seed=0x6A05, steps=12)
     frac = seq.dissolve_frac
     # frac 0->1 during dissolve, 1->0 during rematerialize; map to a step.
     idx = int((1.0 - frac) * (len(steps) - 1))
     idx = max(0, min(len(steps) - 1, idx))
-    portrait = fragments_from_grid(steps[idx])
-    # Center the 22-wide sprite in the pane.
-    sprite_w = len(portrait[0]) if portrait else 0
-    left = max(0, (width - sprite_w) // 2)
+    rows = [list(row) for row in fragments_from_grid(steps[idx])]
     blank = ("", " ")
-    centered = []
-    for row in portrait:
-        centered.append([blank] * left + list(row) + [blank] * max(0, width - left - sprite_w))
-    # Pad vertically to the pane height.
-    while len(centered) < height:
-        centered.append([blank] * width)
-    portrait = centered[:height]
-    fragments: list[tuple[str, str]] = []
-    for row in portrait:
-        fragments.append(("", pad))
-        fragments.extend(row)
-        fragments.append(("", "\n"))
+    norm = []
+    for row in rows[:BUDDY_ROWS]:
+        row = list(row)[:BUDDY_W] + [blank] * max(0, BUDDY_W - len(row))
+        norm.append(row)
+    while len(norm) < BUDDY_ROWS:
+        norm.append([blank] * BUDDY_W)
     if seq.phase == "stitch":
-        # The bottom two rows become the label + the shimmering bar.
-        label = update_flow.STITCHING
-        label_pad = " " * max(0, (width - len(label)) // 2)
-        del fragments[-(2 * (width + 2)) :]
-        fragments.append(("", pad))
-        fragments.append(("class:muted", label_pad + label))
-        fragments.append(("", "\n"))
-        fragments.append(("", pad))
-        fragments.extend(_stitch_bar(seq.frame, width))
-        fragments.append(("", "\n"))
-    return fragments
+        norm[-1] = _stitch_bar(seq.frame, BUDDY_W)
+    return norm
 
 
 def _confirm_access(
@@ -793,24 +802,31 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     desk = BackgroundDesk(memory, unattended)
     desk.start()
 
+    def term_width() -> int:
+        """Live terminal width for full-width layout. Falls back to 80."""
+        try:
+            return max(40, app.output.get_size().columns)
+        except Exception:
+            return 80
+
     def chat_fragments():
         fragments: list[tuple[str, str]] = []
         if not lines and not state["stream"] and not state["busy"]:
-            fragments.append(("", "\n\n"))
-            fragments.append(("class:greet", _greeting().center(COL_W) + "\n"))
-            fragments.append(("class:muted", "What do you want to do?".center(COL_W) + "\n"))
+            fragments.append(("class:greet", _greeting() + "\n"))
+            fragments.append(("class:muted", "What do you want to do?\n"))
             return fragments
+        w = term_width()
         for role, text in snapshot_lines():
             if role == "you":
-                fragments.extend(_bubble(text))
+                fragments.extend(_you_fragments(text, w))
             elif role == "ghost":
                 fragments.append(("class:reply", text + "\n\n"))
             elif role == "tool":
-                fragments.append(("class:tool", "  · " + text + "\n"))
+                fragments.append(("class:tool", "· " + text + "\n"))
             elif role == "ask":
-                fragments.append(("class:ask", "  ? " + text + "\n"))
+                fragments.append(("class:ask", "? " + text + "\n"))
             else:
-                fragments.append(("class:muted", "  " + text + "\n"))
+                fragments.append(("class:muted", text + "\n"))
         if state["stream"]:
             fragments.append(("class:reply", state["stream"]))
         elif state["busy"]:
@@ -852,125 +868,121 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         "resubmit": resubmit_queue.append,
     }
 
-    def ghost_fragments():
-        width, height = chrome["ghost_width"], chrome["ghost_height"]
-        pad = " " * ((COL_W - width) // 2)
+    def header_fragments():
+        """Full-width header: the buddy docked top-left, status and meter beside it.
+
+        Row 0: `ghost desk · <status>` left, context meter + model right.
+        Row 1: crew activity, if any. Rows 2-5 are empty air the leaves drift through.
+        """
+        from ghost_desk.face import (
+            BUDDY_ROWS,
+            BUDDY_W,
+            buddy_frame,
+            confetti_fragments,
+            dither_shade,
+            fragments_from_grid,
+            sleep_z_fragments,
+        )
+
+        w = term_width()
+        blank = ("", " ")
         seq = state.get("update_seq")
         if seq is not None:
-            # The /update show takes over the ghost pane: dissolve, stitch, re-materialize.
-            return _update_ghost_fragments(seq, width, height, pad)
-        if ui_toggles["picture_protocol"]:
+            # The /update show takes over the buddy: dissolve, stitch, re-materialize.
+            buddy_rows = _update_buddy_rows(seq)
+        elif ui_toggles["picture_protocol"]:
             # The real picture paints over this blank space after each flush.
-            portrait = [[("", " ")] * width for _ in range(height)]
+            buddy_rows = [[blank] * BUDDY_W for _ in range(BUDDY_ROWS)]
         else:
-            # The 90s sprite: GhostLife picks the frame (blink, glance,
-            # sleep, busy scan); it bobs while working.
-            from ghost_desk.face import render_sprite_frame
-
+            # The buddy: GhostLife picks the frame (blink, glance, sleep,
+            # busy scan). No bob — it sits docked in the header.
             frame_name = life.frame()
             # Past 85% context, occasionally glance at the meter.
             if frame_name == "neutral" and health.glance_at_meter() and life.tick_count % 10 == 0:
                 frame_name = "glance_meter"
-            bob = life.tick_count % 2 if state["busy"] else 0
-            portrait = [list(row) for row in render_sprite_frame(frame_name, width=width, bob=bob)]
+            buddy_rows = [list(row) for row in fragments_from_grid(dither_shade(buddy_frame(frame_name)))]
             # Error flinch: shift ±1 cell.
             dx = life.flinch_dx()
-            if dx != 0:
-                blank = ("", " ")
-                for i, row in enumerate(portrait):
-                    if dx > 0:
-                        portrait[i] = [blank] * dx + row[:-dx]
-                    else:
-                        portrait[i] = row[-dx:] + [blank] * (-dx)
+            if dx:
+                for i, row in enumerate(buddy_rows):
+                    buddy_rows[i] = ([blank] * dx + row[:-dx]) if dx > 0 else (row[-dx:] + [blank] * (-dx))
+        # Normalize to BUDDY_W x BUDDY_ROWS.
+        norm = []
+        for row in buddy_rows[:BUDDY_ROWS]:
+            row = list(row)[:BUDDY_W] + [blank] * max(0, BUDDY_W - len(row))
+            norm.append(row)
+        while len(norm) < BUDDY_ROWS:
+            norm.append([blank] * BUDDY_W)
+        buddy_rows = norm
+
+        # Full-width rows: buddy art at cols 0..15, text from col 18.
+        rows: list[list[tuple[str, str]]] = [row + [blank, blank] for row in buddy_rows]
+
+        # Row 0: brand + status left, meter + model right.
+        full = access_level(config) == "full"
+        if seq is not None and seq.phase == "stitch":
+            rows[0].append(("class:muted", update_flow.STITCHING))
+        else:
+            if state["busy"]:
+                elapsed = max(0, int(time.monotonic() - state["started"]))
+                phase = {"searching": "searching", "reading": "reading", "working": "working"}.get(
+                    state["activity"], "thinking"
+                )
+                line = header_line(
+                    busy=True, phase=phase, elapsed=elapsed, full_access=full,
+                    meter_colors=tuple(health.block_colors(10)),
+                    model=config.model or "", width=w,
+                )
+            else:
+                line = header_line(
+                    busy=False, full_access=full,
+                    meter_colors=tuple(health.block_colors(10)),
+                    model=config.model or "", width=w,
+                )
+            rows[0].extend(line)
+
+        # Row 1: crew, compact.
+        visible = crew.visible
+        if visible:
+            from ghost_desk.face import CREW_LABELS
+
+            labels = " · ".join(CREW_LABELS.get(m.activity, m.activity) for m in visible)
+            if crew.overflow:
+                labels += f" · +{crew.overflow} more"
+            rows[1].append(("class:muted", labels))
+
+        # Pad every row to the full width, then stamp overlays on top.
+        for row in rows:
+            vis = sum(len(ch) for _, ch in row)
+            row.extend([blank] * max(0, w - vis))
+        overlays: list[tuple[int, int, list[list[tuple[str, str]]]]] = []
+        if life.sleeping:
+            overlays += sleep_z_fragments(life.tick_count, BUDDY_W, BUDDY_ROWS)
+        if life.bouncing():
+            overlays += confetti_fragments(life.tick_count, BUDDY_W, BUDDY_ROWS)
         leaf_field = ui_toggles["leaf_field"]
         if leaf_field is not None:
-            for lx, ly, frag_rows in leaf_field.fragments():
-                for dy, frow in enumerate(frag_rows):
-                    y = ly + dy
-                    if not 0 <= y < height:
-                        continue
-                    for dx, cell in enumerate(frow):
-                        x = lx + dx
-                        if 0 <= x < width:
-                            portrait[y][x] = cell
-        # Sleep Z's float above the head; done-bounce confetti is restrained.
-        from ghost_desk.face import confetti_fragments, sleep_z_fragments
-        overlays = []
-        if life.sleeping:
-            overlays += sleep_z_fragments(life.tick_count, width, height)
-        if life.bouncing():
-            overlays += confetti_fragments(life.tick_count, width, height)
+            overlays += [(lx, ly, frag) for lx, ly, frag in leaf_field.fragments()]
         for ox, oy, frag_rows in overlays:
             for dy, frow in enumerate(frag_rows):
                 y = oy + dy
-                if not 0 <= y < height:
+                if not 0 <= y < BUDDY_ROWS:
                     continue
-                for dx, cell in enumerate(frow):
-                    x = ox + dx
-                    if 0 <= x < width:
-                        portrait[y][x] = cell
+                for dxx, cell in enumerate(frow):
+                    x = ox + dxx
+                    if 0 <= x < w:
+                        rows[y][x] = cell
         fragments: list[tuple[str, str]] = []
-        for row in portrait:
-            fragments.append(("", pad))
+        for row in rows:
             fragments.extend(row)
             fragments.append(("", "\n"))
-        return fragments
-
-    def header_fragments():
-        full = access_level(config) == "full"
-        if state["busy"]:
-            elapsed = max(0, int(time.monotonic() - state["started"]))
-            phase = {"searching": "searching", "reading": "reading", "working": "working"}.get(
-                state["activity"], "thinking"
-            )
-            right = header_status(busy=True, phase=phase, elapsed=elapsed, full_access=full)
-        else:
-            right = header_status(busy=False, full_access=full)
-        left = " ghost desk"
-        gap = max(1, COL_W - len(left) - len(right) - 1)
-        return [("class:brand", left), ("class:muted", " " * gap + right + " ")]
-
-    def context_fragments():
-        # Twenty chunky blocks, no label, no percentage. Lilac <60%,
-        # amber 60-84%, red at 85%+.
-        colors = health.block_colors()
-        pad = " " * ((COL_W - len(colors) * 2) // 2)
-        fragments = [("", pad)]
-        for color in colors:
-            fragments.append((f"fg:{color}", "██"))
-        fragments.append(("", "\n"))
-        return fragments
-
-    def divider_fragments():
-        # One pixel divider between the ghost/header area and the chat.
-        from ghost_desk.face import pixel_rule
-
-        cells = pixel_rule(COL_W)[0]
-        return [(style, ch) for style, ch in cells] + [("", "\n")]
-
-    def crew_fragments():
-        # Ghost crew row below the main ghost: one mini per active worker.
-        from ghost_desk.face import CREW_LABELS, crew_frame
-
-        visible = crew.visible
-        if not visible:
-            return []
-        fragments = [("", " " * ((COL_W - len(visible) * 18) // 2))]
-        for i, member in enumerate(visible):
-            frame = crew_frame(member.activity, life.tick_count % 2)
-            # Flatten the first row of the mini ghost as a label line.
-            label = CREW_LABELS.get(member.activity, "")
-            fragments.append(("class:muted", f"{label} "))
-        if crew.overflow:
-            fragments.append(("class:muted", f"+{crew.overflow} more"))
-        fragments.append(("", "\n"))
         return fragments
 
     def chips_fragments():
         if lines or state["busy"] or state["stream"]:
             return []
-        row = "   ".join(f"○ {i}  {chip}" for i, chip in enumerate(CHIPS, 1))
-        return [("class:chip", row.center(COL_W) + "\n")]
+        row = "   ".join(f"{i} · {chip}" for i, chip in enumerate(CHIPS, 1))
+        return [("class:chip", row + "\n")]
 
     buffer = Buffer(multiline=True)
 
@@ -1035,10 +1047,10 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     buffer.on_text_changed.add_handler(lambda _: _pal_update())
 
     def palette_fragments():
-        """The floating command palette panel, above the input pill."""
+        """The floating command palette panel, above the input line."""
         if not _pal_visible():
             return []
-        w = COL_W - 4
+        w = term_width()
         lines: list[list[tuple[str, str]]] = []
 
         def _row(cells: list[tuple[str, str]]) -> None:
@@ -1354,9 +1366,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                     state["update_seq"] = None
                 ticked = True
             lf = ui_toggles["leaf_field"]
-            if lf is not None and lf.tick(
-                time.monotonic(), chrome["ghost_width"], chrome["ghost_height"]
-            ):
+            if lf is not None and lf.tick(time.monotonic(), term_width(), BUDDY_ROWS):
                 ticked = True
             # Upgrade ceremony: staged at turn end, or while away. Played here
             # in the app thread via run_in_terminal — the full-screen UI is
@@ -1382,92 +1392,51 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             if ticked:
                 app.invalidate()
 
-    ghost = Window(
-        height=chrome["ghost_height"],
-        content=FormattedTextControl(ghost_fragments),
-        style="class:side",
+    from ghost_desk.face import BUDDY_ROWS
+
+    header_win = Window(
+        height=BUDDY_ROWS,
+        content=FormattedTextControl(header_fragments),
+        style="class:header",
     )
     chat = Window(
         content=FormattedTextControl(chat_fragments),
         wrap_lines=True,
         style="class:chat",
     )
-    header = Window(
-        height=1,
-        content=FormattedTextControl(header_fragments),
-        style="class:header",
-    )
     chips = Window(
         height=1,
         content=FormattedTextControl(chips_fragments),
         style="class:chips",
     )
+    prompt_win = Window(
+        width=2,
+        height=1,
+        content=FormattedTextControl(lambda: [("class:prompt", "\u203a ")]),
+        style="class:input",
+    )
     typed = Window(
         content=BufferControl(buffer=buffer),
-        width=COL_W - 4,
         height=1,
-        style="class:composer",
+        style="class:input",
     )
-    pill = HSplit(
-        [
-            Window(
-                height=1,
-                content=FormattedTextControl(lambda: [("class:pill", "╭" + "─" * (COL_W - 2) + "╮")]),
-            ),
-            VSplit(
-                [
-                    Window(
-                        width=2,
-                        height=1,
-                        content=FormattedTextControl(lambda: [("class:pill", "│ ")]),
-                    ),
-                    typed,
-                    Window(
-                        width=2,
-                        height=1,
-                        content=FormattedTextControl(lambda: [("class:pill", " │")]),
-                    ),
-                ],
-                height=1,
-            ),
-            Window(
-                height=1,
-                content=FormattedTextControl(lambda: [("class:pill", "╰" + "─" * (COL_W - 2) + "╯")]),
-            ),
-        ]
-    )
+    input_row = VSplit([prompt_win, typed], height=1)
     hint = Window(
         height=1,
         content=FormattedTextControl(
-            lambda: [("class:muted", "Enter send  ·  Alt-Enter newline  ·  /help  ·  /new".center(COL_W))]
+            lambda: [("class:muted", "Enter send  \u00b7  Alt-Enter newline  \u00b7  /help  \u00b7  /new")]
         ),
         style="class:footer",
-    )
-    context_bar = Window(
-        height=1,
-        content=FormattedTextControl(context_fragments),
-        style="class:meter",
-    )
-    divider = Window(
-        height=1,
-        content=FormattedTextControl(divider_fragments),
-        style="class:rule",
-    )
-    crew_row = Window(
-        height=1,
-        content=FormattedTextControl(crew_fragments),
-        style="class:side",
     )
     palette_win = Window(
         height=_pal_height,
         content=FormattedTextControl(palette_fragments),
         style="class:palette",
     )
-    body = HSplit(
-        [header, context_bar, ghost, crew_row, divider, chat, chips, palette_win, pill, hint],
-        width=COL_W,
-    )
-    layout = Layout(VSplit([Window(style="class:chat"), body, Window(style="class:chat")]))
+    # Full-width terminal-native layout: header, chat, palette, input, hint.
+    # No centered column, no side margins — the app fills the terminal.
+    body = HSplit([header_win, chat, chips, palette_win, input_row, hint])
+    layout = Layout(body)
     app = Application(
         layout=layout,
         key_bindings=bindings,
@@ -1480,7 +1449,8 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 "meter": "bg:#090909",
                 "rule": "bg:#090909 #333333",
                 "composer": "bg:#161616 #f0f0f0",
-                "prompt": "bg:#161616 #9a9a9a",
+                "input": "#f0f0f0",
+                "prompt": "#9a9a9a",
                 "brand": "bold #f0abfc",
                 "bubble": "bg:#1e1e1e #f4f4f4",
                 "greet": "#ededed",
