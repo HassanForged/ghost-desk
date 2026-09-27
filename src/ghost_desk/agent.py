@@ -12,7 +12,7 @@ from pathlib import Path
 
 from ghost_desk.client import ClientError, MissingKey
 from ghost_desk.compact import Compactor, extractive
-from ghost_desk.config import Config
+from ghost_desk.config import Config, access_level
 from ghost_desk.memory import Memory
 from ghost_desk.notes import record_verified
 from ghost_desk.permissions import PermissionGate
@@ -68,6 +68,7 @@ class DeskSession:
     frozen_prompt: str = ""
     gate: PermissionGate | None = None
     unfinished_nudges: int = 0
+    access_pending: bool = False
 
 
 def _topic(text: str) -> str:
@@ -252,7 +253,7 @@ def run_turn(
     if gate is None:
         gate = session.gate
     if gate is None:
-        gate = PermissionGate(workspace, ask=ask)
+        gate = PermissionGate(workspace, ask=ask, full_access=access_level(config) == "full")
     # The session keeps the gate: approvals carry across turns.
     session.gate = gate
     report = VerificationReport()

@@ -77,6 +77,11 @@ class Memory:
                 """
             )
             self._conn.commit()
+            # Migration: jobs created before the access column existed.
+            cols = [row[1] for row in self._conn.execute("PRAGMA table_info(jobs)")]
+            if "access" not in cols:
+                self._conn.execute("ALTER TABLE jobs ADD COLUMN access TEXT NOT NULL DEFAULT 'ask'")
+                self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -223,15 +228,16 @@ class Memory:
         with self._lock:
             return list(self._conn.execute("SELECT * FROM research ORDER BY id DESC LIMIT ?", (limit,)))
 
-    def add_job(self, name: str, schedule: str, prompt: str) -> None:
+    def add_job(self, name: str, schedule: str, prompt: str, access: str = "ask") -> None:
+        level = "full" if str(access or "").strip().lower() == "full" else "ask"
         with self._lock:
             self._conn.execute(
                 """
-                INSERT INTO jobs (name, schedule, prompt, enabled, last_run)
-                VALUES (?, ?, ?, 1, '')
-                ON CONFLICT(name) DO UPDATE SET schedule = excluded.schedule, prompt = excluded.prompt, enabled = 1
+                INSERT INTO jobs (name, schedule, prompt, enabled, last_run, access)
+                VALUES (?, ?, ?, 1, '', ?)
+                ON CONFLICT(name) DO UPDATE SET schedule = excluded.schedule, prompt = excluded.prompt, enabled = 1, access = excluded.access
                 """,
-                (name, schedule, prompt),
+                (name, schedule, prompt, level),
             )
             self._conn.commit()
 

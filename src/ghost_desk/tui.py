@@ -14,7 +14,7 @@ from rich.text import Text
 
 from ghost_desk.agent import AgentResult, DeskSession, run_turn
 from ghost_desk.background import BackgroundDesk, build_digest, digest_due, run_due, write_digest
-from ghost_desk.config import Config, SetupError, needs_setup, save_config, setup_interactive
+from ghost_desk.config import Config, SetupError, access_level, needs_setup, save_config, setup_interactive
 from ghost_desk.providers import build_client
 from ghost_desk.curator import curate
 from ghost_desk.memory import Memory
@@ -24,11 +24,24 @@ from ghost_desk.skills import ensure_skills, load_child, load_parents, render_in
 from ghost_desk.subagents import spawn
 from ghost_desk.tools import schemas
 
-def header_status(*, busy: bool, phase: str = "thinking", elapsed: int = 0) -> str:
+def header_status(*, busy: bool, phase: str = "thinking", elapsed: int = 0, full_access: bool = False) -> str:
     """Right side of the session header. The ghost is the identity here; the brain stays under /model."""
+    suffix = " · full access" if full_access else ""
     if busy:
-        return f"rattling chains…  {elapsed}s"
-    return "haunting"
+        return f"rattling chains…  {elapsed}s{suffix}"
+    return "haunting" + suffix
+
+
+ACCESS_PHRASE = "i trust my ghost"
+ACCESS_WARNING = (
+    "full access means i won't ask before reading, writing, editing, or running commands "
+    "on this machine. everything still gets logged. you can take it back anytime with /access ask.\n"
+    'type "i trust my ghost" to turn it on — anything else cancels.'
+)
+ACCESS_ON = (
+    "full access is on. i won't ask before reading, writing, or running commands. "
+    "everything is still logged. /access ask takes it back."
+)
 
 
 def session_chrome() -> dict:
@@ -96,6 +109,7 @@ HELP = """\
 /export      write Markdown folders
 /curate      merge duplicate skills and prune dead ones
 /bg          list jobs, /bg add <schedule> <prompt>, /bg digest
+/access      show or change access level (/access full, /access ask)
 /quit        leave
 Enter sends. Alt-Enter inserts a newline. Ctrl+C cancels the current turn.
 """
@@ -208,6 +222,7 @@ def _slash(
     memory: Memory,
     session: DeskSession,
     skills_root: Path,
+    gate: PermissionGate | None = None,
 ) -> str | None:
     """Return 'quit' to leave, or a string that was handled. None means it is not a slash command."""
     stripped = text.strip()
@@ -256,6 +271,32 @@ def _slash(
         if config.config_file().is_file():
             save_config(config)
         console.print(f"model {rest}")
+        return "ok"
+    if command == "access":
+        level = rest.lower()
+        if not level:
+            current = access_level(config)
+            if current == "full":
+                console.print("access: full — i don't ask before reading, writing, or running commands.")
+            else:
+                console.print("access: ask — i check before writes and shell.")
+            return "ok"
+        if level == "ask":
+            config.access = "ask"
+            save_config(config)
+            if gate is not None:
+                gate.full_access = False
+            session.access_pending = False
+            console.print("back to asking first.")
+            return "ok"
+        if level == "full":
+            if access_level(config) == "full":
+                console.print("full access is already on.")
+                return "ok"
+            console.print(ACCESS_WARNING, markup=False)
+            session.access_pending = True
+            return "ok"
+        console.print("usage: /access [full|ask]")
         return "ok"
     if command == "tools":
         console.print("shell\nfile_read\nfile_write\nfile_edit\nhttp_fetch\nweb_search\nopen\nclipboard\nclose_ghosts\nlittle_ghost")
@@ -340,6 +381,30 @@ def _slash(
     return "ok"
 
 
+def _confirm_access(
+    text: str,
+    *,
+    console: Console,
+    config: Config,
+    session: DeskSession,
+    gate: PermissionGate | None,
+) -> bool:
+    """Handle a pending `/access full` confirmation. True means the input was consumed."""
+    if not session.access_pending:
+        return False
+    if text.strip().lower() == ACCESS_PHRASE:
+        config.access = "full"
+        save_config(config)
+        if gate is not None:
+            gate.full_access = True
+        session.access_pending = False
+        console.print(ACCESS_ON, markup=False)
+        return True
+    session.access_pending = False
+    console.print("full access stays off.", markup=False)
+    return False
+
+
 def _latest_session(memory: Memory) -> str:
     rows = memory.list_sessions(limit=1)
     if not rows:
@@ -354,7 +419,8 @@ def _bg(rest: str, *, console: Console, memory: Memory, config: Config, session:
             console.print("No background jobs. /bg add daily Review the notes")
             return "ok"
         for job in jobs:
-            console.print(f"{job['name']} {job['schedule']} {job['prompt']}", markup=False)
+            level = job["access"] if "access" in job.keys() else "ask"
+            console.print(f"{job['name']} {job['schedule']} [{level}] {job['prompt']}", markup=False)
         return "ok"
     if rest == "digest":
         console.print(write_digest(memory), markup=False)
@@ -368,8 +434,8 @@ def _bg(rest: str, *, console: Console, memory: Memory, config: Config, session:
         from ghost_desk.background import parse_schedule
 
         name = "job-" + schedule.replace(" ", "-")
-        memory.add_job(name, parse_schedule(schedule), prompt)
-        console.print(f"added {name}. It will not invent extra work.")
+        memory.add_job(name, parse_schedule(schedule), prompt, access=access_level(config))
+        console.print(f"added {name} [{access_level(config)} access]. It will not invent extra work.")
         return "ok"
     if rest.startswith("run "):
         name = rest[4:].strip()
@@ -390,7 +456,7 @@ def _one_turn(text, *, config, memory, session, skills_root, console=None, promp
     def on_status(note: str) -> None:
         status.set(note, console)
 
-    gate = PermissionGate(config.workspace(), ask=_asker(console, prompter))
+    gate = PermissionGate(config.workspace(), ask=_asker(console, prompter), full_access=access_level(config) == "full")
 
     def spawn_fn(**kwargs):
         return spawn(client_factory=build_client, **kwargs)
@@ -510,8 +576,12 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     log = _Log(lines, refresh, lines_lock)
 
-    def unattended(prompt: str) -> str:
-        gate = PermissionGate(config.workspace(), ask=lambda _question: False)
+    def unattended(prompt: str, access: str = "ask") -> str:
+        gate = PermissionGate(
+            config.workspace(),
+            ask=lambda _question: False,
+            full_access=(access == "full"),
+        )
         result = run_turn(
             prompt,
             config=config,
@@ -587,14 +657,15 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         return fragments
 
     def header_fragments():
+        full = access_level(config) == "full"
         if state["busy"]:
             elapsed = max(0, int(time.monotonic() - state["started"]))
             phase = {"searching": "searching", "reading": "reading", "working": "working"}.get(
                 state["activity"], "thinking"
             )
-            right = header_status(busy=True, phase=phase, elapsed=elapsed)
+            right = header_status(busy=True, phase=phase, elapsed=elapsed, full_access=full)
         else:
-            right = header_status(busy=False)
+            right = header_status(busy=False, full_access=full)
         left = " ghost desk"
         gap = max(1, COL_W - len(left) - len(right) - 1)
         return [("class:brand", left), ("class:muted", " " * gap + right + " ")]
@@ -622,17 +693,20 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         return yes
 
     # One gate per session: an approved path stays approved across turns.
-    gate = PermissionGate(config.workspace(), ask=ask_allow)
+    gate = PermissionGate(config.workspace(), ask=ask_allow, full_access=access_level(config) == "full")
 
     def submit() -> None:
         text = buffer.text
         buffer.reset()
+        if _confirm_access(text, console=log, config=config, session=session, gate=gate):
+            refresh()
+            return
         if _answer_pending(pending, text):
             return
         if not text.strip() or state["busy"]:
             return
         add_line("you", text.strip())
-        handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root)
+        handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root, gate=gate)
         if handled == "quit":
             app.exit(result=0)
             return
@@ -907,6 +981,8 @@ def run_tui(
             session.id = previous
             session.history = history
     status = Status()
+    if access_level(config) == "full":
+        console.print("full access is on — /access ask to take it back.")
     if prompter is None and sys.stdin.isatty():
         return _run_chat(config, console, memory, session, skills_root, status)
     ask = prompter or default_prompter(status, config.data_path())
@@ -921,8 +997,12 @@ def run_tui(
         console.print("[dim]Monthly digest is ready for review. /bg digest writes it. Nothing runs by itself.[/dim]")
     console.print("Talk here.  /help for commands", style="dim")
 
-    def unattended(prompt: str) -> str:
-        gate = PermissionGate(config.workspace(), ask=lambda _question: False)
+    def unattended(prompt: str, access: str = "ask") -> str:
+        gate = PermissionGate(
+            config.workspace(),
+            ask=lambda _question: False,
+            full_access=(access == "full"),
+        )
         result = run_turn(
             prompt,
             config=config,
@@ -938,7 +1018,7 @@ def run_tui(
     desk = BackgroundDesk(memory, unattended)
     desk.start()
     # One gate for the whole session: approved paths stay approved across turns.
-    gate = PermissionGate(config.workspace(), ask=_asker(console, ask))
+    gate = PermissionGate(config.workspace(), ask=_asker(console, ask), full_access=access_level(config) == "full")
     try:
         while True:
             try:
@@ -953,6 +1033,8 @@ def run_tui(
                 break
             if not str(text).strip():
                 continue
+            if _confirm_access(str(text), console=console, config=config, session=session, gate=gate):
+                continue
             handled = _slash(
                 str(text),
                 console=console,
@@ -960,6 +1042,7 @@ def run_tui(
                 memory=memory,
                 session=session,
                 skills_root=skills_root,
+                gate=gate,
             )
             if handled == "quit":
                 break

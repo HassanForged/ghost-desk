@@ -28,6 +28,7 @@ KEYS = (
     "auth_mode",
     "fallback_provider",
     "fallback_model",
+    "access",
 )
 
 DEFAULT_BASE_URL = "https://api.openai.com/v1"
@@ -49,6 +50,7 @@ class Config:
     auth_mode: str = ""
     fallback_provider: str = ""
     fallback_model: str = ""
+    access: str = "ask"
 
     def data_path(self) -> Path:
         raw = self.data_dir.strip() or str(default_data_dir())
@@ -167,6 +169,11 @@ def save_config(cfg: Config) -> Path:
 
 def needs_setup(cfg: Config) -> bool:
     return not cfg.config_file().is_file()
+
+
+def access_level(cfg: Config) -> str:
+    """'full' when the user has explicitly granted full access, else 'ask'."""
+    return "full" if str(cfg.access or "").strip().lower() == "full" else "ask"
 
 
 def _open_browser(url: str) -> None:

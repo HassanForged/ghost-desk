@@ -5,6 +5,7 @@ local midnight, not midnight UTC."""
 
 from __future__ import annotations
 
+import inspect
 import re
 import threading
 from collections.abc import Callable
@@ -220,6 +221,9 @@ def run_due(
     now: datetime | None = None,
 ) -> list[str]:
     now = now or _local_now()
+    # Runners that accept (prompt, access) get the job's stored access level;
+    # older single-argument runners keep working.
+    takes_access = len(inspect.signature(runner).parameters) >= 2
     ran: list[str] = []
     current = minute_key(now)
     for job in memory.list_jobs():
@@ -229,7 +233,8 @@ def run_due(
             continue
         if job["last_run"] and job["last_run"][:16] == current[:16]:
             continue
-        result = runner(job["prompt"])
+        access = job["access"] if "access" in job.keys() else "ask"
+        result = runner(job["prompt"], access) if takes_access else runner(job["prompt"])
         memory.mark_job(job["name"], current)
         memory.add_research(
             topic=job["name"],

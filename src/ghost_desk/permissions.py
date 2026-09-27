@@ -131,9 +131,10 @@ def shell_kind(command: str, workspace: Path) -> str:
 
 
 class PermissionGate:
-    def __init__(self, workspace: Path, ask: Ask | None = None):
+    def __init__(self, workspace: Path, ask: Ask | None = None, full_access: bool = False):
         self.workspace = workspace.resolve()
         self.ask = ask or (lambda _prompt: False)
+        self.full_access = full_access
         self._write_ok: set[Path] = set()
         self._shell_ok: set[str] = set()
         self.claimed: set[str] = set()
@@ -152,15 +153,25 @@ class PermissionGate:
 
     def _check_path(self, path: Path, write: bool) -> Decision:
         if is_secret_path(path):
+            kind = "secret"
+        elif not inside_workspace(path, self.workspace):
+            kind = "outside"
+        elif not write:
+            return Decision(True, "read allowed", path, "read")
+        else:
+            kind = "write"
+        if self.full_access:
+            # Full access: still decided through the gate (audit trail intact),
+            # but never prompts.
+            return Decision(True, "full access", path, kind)
+        if kind == "secret":
             if self.ask(f"Allow secret path {path}?"):
                 return Decision(True, "user allowed secret", path, "secret")
             return Decision(False, f"refused secret path {path.name}", path, "secret")
-        if not inside_workspace(path, self.workspace):
+        if kind == "outside":
             if self.ask(f"Allow path outside workspace {path}?"):
                 return Decision(True, "user allowed outside path", path, "outside")
             return Decision(False, f"refused path outside workspace: {path}", path, "outside")
-        if not write:
-            return Decision(True, "read allowed", path, "read")
         try:
             resolved = path.resolve()
         except OSError:
@@ -174,6 +185,10 @@ class PermissionGate:
 
     def check_shell(self, command: str) -> Decision:
         kind = shell_kind(command, self.workspace)
+        if self.full_access:
+            # Full access: the decision still flows through the gate so the
+            # verification report records what ran; only the prompting is gone.
+            return Decision(True, "full access", None, kind)
         if kind == "secret":
             if self.ask(f"Allow shell touching secrets: {command}?"):
                 return Decision(True, "user allowed secret shell", None, "secret")
