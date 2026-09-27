@@ -224,7 +224,7 @@ def setup_interactive(
     claude_auth_path: Path | None = None,
     boot_choice: str | None = None,
 ) -> Config:
-    """Same provider list Hermes and OpenClaw show. Re-running updates the brain and leaves memory."""
+    """Pick a brain for the ghost. Re-running updates the brain and leaves memory."""
     cfg = cfg or load_config()
     cfg.data_path().mkdir(parents=True, exist_ok=True)
     if grok_auth_path is None:
@@ -234,15 +234,17 @@ def setup_interactive(
     if boot_choice:
         choice = {
             "1": "chatgpt",
-            "2": "claude",
-            "3": "grok",
-            "4": "api",
-            "5": "local",
+            "2": "openai-api",
+            "3": "claude",
+            "4": "grok-oauth",
+            "5": "xai",
+            "6": "ollama",
+            "7": "openrouter",
         }.get(boot_choice.strip(), "")
         if not choice:
-            raise SetupError("Choose 1, 2, 3, 4, or 5.")
+            raise SetupError("Choose 1, 2, 3, 4, 5, 6, or 7.")
     else:
-        output_fn("Which brain?")
+        output_fn("pick a brain for the ghost")
         output_fn("  OpenAI")
         output_fn("  1  ChatGPT or Codex Subscription")
         output_fn("  2  OpenAI API key")

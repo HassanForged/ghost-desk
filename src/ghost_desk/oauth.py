@@ -172,7 +172,7 @@ def load_tokens(path, provider: str | None = None) -> TokenSet | None:
 
 
 def read_external_tokens(path) -> TokenSet | None:
-    """Read a Grok CLI auth.json. Accepts the issuer map, a flat token, or a nested tokens object."""
+    """Read a CLI auth.json. Accepts the issuer map, a flat token, or a nested tokens object."""
     if path is None or not path.is_file():
         return None
     try:

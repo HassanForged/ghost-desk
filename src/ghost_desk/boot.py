@@ -15,7 +15,7 @@ RESET = "\033[0m"
 HIDE = "\033[?25l"
 SHOW = "\033[?25h"
 LEFT_COLS = 42
-TAGLINE = "Your brain, your machine, your notes."
+TAGLINE = "one ghost, your machine, your notes."
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 _GHOST_CACHE: list[str] | None = None
@@ -184,13 +184,16 @@ def _type_title(left: list[str], level: int, title: str) -> list[str]:
 
 
 def _menu() -> list[str]:
+    """One provider menu, shared with config.setup_interactive. Same choices, same numbering."""
     return [
-        "which brain",
-        "  1  chatgpt subscription",
-        "  2  claude subscription",
-        "  3  grok subscription",
-        "  4  api key",
-        "  5  local model",
+        "pick a brain for the ghost",
+        "  1  chatgpt or codex subscription",
+        "  2  openai api key",
+        "  3  claude subscription",
+        "  4  grok subscription (oauth)",
+        "  5  grok api key",
+        "  6  local model (ollama)",
+        "  7  openrouter or any openai-compatible url",
     ]
 
 
@@ -198,7 +201,7 @@ def _checks(level_step=None) -> list[str]:
     left: list[str] = []
     left = _type_title(left, 0, "ghost desk")
     steps = (
-        (0, "waking local harness", " ready"),
+        (0, "waking the ghost", " ready"),
         (1, "checking this pc", " ok"),
         (2, "memory", " on disk"),
         (3, "skills", " loaded"),
@@ -223,11 +226,11 @@ def _choose(left: list[str]) -> str:
             continue
         if key in {"\x03", "\x1b"}:
             raise KeyboardInterrupt
-        if key in {"1", "2", "3", "4", "5"}:
-            locked = frame + ["", "brain locked"]
-            _paint(locked, 4, False)
+        if key in {"1", "2", "3", "4", "5", "6", "7"}:
+            bound = frame + ["", "brain bound"]
+            _paint(bound, 4, False)
             time.sleep(0.12)
-            _paint(locked + ["ready"], 4, False)
+            _paint(bound + ["ready"], 4, False)
             return key
 
 
@@ -254,7 +257,7 @@ class BootScreen:
             self.left = [
                 "ghost desk",
                 FAINT + TAGLINE + RESET,
-                "waking local harness" + FAINT + " ready" + RESET,
+                "waking the ghost" + FAINT + " ready" + RESET,
                 "checking this pc" + FAINT + " ok" + RESET,
                 "memory" + FAINT + " on disk" + RESET,
                 "skills" + FAINT + " loaded" + RESET,
@@ -271,7 +274,7 @@ class BootScreen:
         _paint(self.left, 4, False)
         time.sleep(0.15)
         steps = (
-            ("waking local harness", " ready"),
+            ("waking the ghost", " ready"),
             ("checking this pc", " ok"),
             ("memory", " on disk"),
             ("skills", " loaded"),
@@ -315,7 +318,7 @@ class BootScreen:
 
 
 def run_boot(skip_to_menu: bool = False, choose: bool = True, signed: bool = False) -> str:
-    """Play the boot. Return '1'..'5' when choosing a brain."""
+    """Play the boot. Return '1'..'7' when choosing a brain."""
     screen = BootScreen()
     screen.enter()
     try:

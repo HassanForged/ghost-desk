@@ -7,12 +7,8 @@ from dataclasses import dataclass, field
 
 from ghost_desk.config import Config
 
+# Routes default to the desk's bound brain; GHOST_<KIND>_MODEL can override per route.
 # Used only when that route's key is actually set. Otherwise the desk model is used.
-_ROUTE_DEFAULTS = {
-    "design": "claude-3-5-sonnet",
-    "code": "grok-3",
-    "research": "gpt-4o-mini",
-}
 _ROUTE_ENV = {
     "design": ("GHOST_DESIGN_API_KEY", "GHOST_DESIGN_BASE_URL", "GHOST_DESIGN_MODEL"),
     "code": ("GHOST_CODE_API_KEY", "GHOST_CODE_BASE_URL", "GHOST_CODE_MODEL"),
@@ -61,7 +57,7 @@ def route(kind: str, config: Config) -> Config:
     return Config(
         api_key=key,
         base_url=os.environ.get(url_name, "").strip() or config.base_url,
-        model=os.environ.get(model_name, "").strip() or _ROUTE_DEFAULTS[kind],
+        model=os.environ.get(model_name, "").strip() or config.model,
         working_directory=config.working_directory,
         data_dir=config.data_dir,
         provider="openai_compatible",

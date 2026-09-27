@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
                 input_fn=screen.ask,
                 output_fn=screen.log,
             )
-            screen.log("brain locked")
+            screen.log("brain bound")
             screen.log("ready")
         except SetupError as exc:
             print(exc, file=sys.stderr)

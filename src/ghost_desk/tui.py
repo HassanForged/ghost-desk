@@ -24,6 +24,13 @@ from ghost_desk.skills import ensure_skills, load_child, load_parents, render_in
 from ghost_desk.subagents import spawn
 from ghost_desk.tools import schemas
 
+def header_status(*, busy: bool, phase: str = "thinking", elapsed: int = 0) -> str:
+    """Right side of the session header. The ghost is the identity here; the brain stays under /model."""
+    if busy:
+        return f"haunting  ·  {phase} {elapsed}s"
+    return "haunting"
+
+
 def session_chrome() -> dict:
     # Pi-like: one centered column, small ghost up top, no side pane.
     return {
@@ -121,7 +128,7 @@ class Status:
 def banner() -> Panel:
     body = Text()
     body.append("GHOST\n", style="bold magenta")
-    body.append("local harness   code stays on this machine\n", style="bright_cyan")
+    body.append("your ghost   code stays on this machine\n", style="bright_cyan")
     body.append("only the chat API leaves the machine", style="bright_cyan")
     return Panel(body, title="Ghost Desk", border_style="bright_magenta", padding=(1, 2))
 
@@ -525,9 +532,9 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             phase = {"searching": "searching", "reading": "reading", "working": "working"}.get(
                 state["activity"], "thinking"
             )
-            right = f"{config.model or 'brain'}  ·  {phase} {elapsed}s"
+            right = header_status(busy=True, phase=phase, elapsed=elapsed)
         else:
-            right = f"{config.model or 'brain'}  ·  idle"
+            right = header_status(busy=False)
         left = " ghost desk"
         gap = max(1, COL_W - len(left) - len(right) - 1)
         return [("class:brand", left), ("class:muted", " " * gap + right + " ")]
@@ -828,7 +835,7 @@ def run_tui(
                     input_fn=screen.ask,
                     output_fn=screen.log,
                 )
-                screen.log("brain locked")
+                screen.log("brain bound")
                 screen.log("ready")
             else:
                 screen.log((config.provider or "brain") + "  " + (config.model or ""))

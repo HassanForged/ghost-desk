@@ -30,13 +30,15 @@ def test_boot_menu_matches_the_reference_screen():
     from ghost_desk.boot import _menu
 
     menu = _menu()
-    assert menu[0] == "which brain"
+    assert menu[0] == "pick a brain for the ghost"
     assert menu[1:] == [
-        "  1  chatgpt subscription",
-        "  2  claude subscription",
-        "  3  grok subscription",
-        "  4  api key",
-        "  5  local model",
+        "  1  chatgpt or codex subscription",
+        "  2  openai api key",
+        "  3  claude subscription",
+        "  4  grok subscription (oauth)",
+        "  5  grok api key",
+        "  6  local model (ollama)",
+        "  7  openrouter or any openai-compatible url",
     ]
 
 

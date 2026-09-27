@@ -1,6 +1,6 @@
 # Ghost Desk
 
-Local terminal agent. Your brain, your machine, your notes.
+Local terminal agent. one ghost, your machine, your notes.
 
 ![Ghost Desk session](docs/welcome.png)
 
@@ -21,17 +21,19 @@ Three rules, enforced in code, not in prompts:
 
 ## Brains
 
-Pick one on first boot — or switch anytime with `/model`:
+Pick a brain for the ghost on first boot — or switch anytime with `/model`:
 
 ![First boot](docs/boot.png)
 
 | # | Brain | What it needs |
 |---|-------|---------------|
-| 1 | ChatGPT subscription | OAuth sign-in |
-| 2 | Claude subscription | OAuth sign-in |
-| 3 | Grok subscription | OAuth sign-in |
-| 4 | API key | Your own key |
-| 5 | Local model | Ollama on `127.0.0.1:11434` — fully offline |
+| 1 | ChatGPT / Codex subscription | OAuth sign-in |
+| 2 | OpenAI API key | Your own key |
+| 3 | Claude subscription | OAuth sign-in |
+| 4 | Grok subscription | OAuth (SuperGrok / Premium+) |
+| 5 | Grok API key | Your own key |
+| 6 | Local model | Ollama on `127.0.0.1:11434` — fully offline |
+| 7 | OpenRouter / OpenAI-compatible | Your own key and URL |
 
 ## Tools
 

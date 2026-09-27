@@ -53,11 +53,12 @@ def _parse_env(path: Path) -> dict[str, str]:
 
 
 def load_gateway_env(data_dir: Path | None = None) -> dict[str, str]:
-    """Token and allowlist. Existing grok-gateway file is only a fallback. Nothing is copied into git."""
+    """Token and allowlist. Nothing is copied into git."""
     merged: dict[str, str] = {}
     home = Path.home()
     for path in (
-        home / "grok-gateway" / "gateway.env",
+        home / "grok-gateway" / "gateway.env",  # legacy, kept silently
+        home / "ghost-desk" / "gateway.env",
         home / ".ghost-desk" / "gateway.env",
         (data_dir or home / ".ghost-desk") / "gateway.env",
     ):
