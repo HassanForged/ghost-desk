@@ -1,4 +1,4 @@
-"""Ghost Desk boot. Left log, right photo. Same hood as the session."""
+"""Ghost Desk boot. Left log, right ghost. Same ghost as the session."""
 
 from __future__ import annotations
 
@@ -138,7 +138,7 @@ def _menu() -> list[str]:
 
 def _checks(level_step=None) -> list[str]:
     left: list[str] = []
-    left = _type_title(left, 0, "GHOST DESK")
+    left = _type_title(left, 0, "ghost desk")
     steps = (
         (0, "waking local harness", " ready"),
         (1, "checking this pc", " ok"),
@@ -193,7 +193,7 @@ class BootScreen:
     def play_checks(self, *, signed: bool = False) -> None:
         if signed:
             self.left = [
-                "GHOST DESK",
+                "ghost desk",
                 FAINT + TAGLINE + RESET,
                 "waking local harness" + FAINT + " ready" + RESET,
                 "checking this pc" + FAINT + " ok" + RESET,
@@ -207,7 +207,7 @@ class BootScreen:
             time.sleep(0.12)
             return
         self.left = []
-        self.left = _type_title(self.left, 0, "GHOST DESK")
+        self.left = _type_title(self.left, 0, "ghost desk")
         self.left = self.left + [FAINT + TAGLINE + RESET]
         _paint(self.left, 4, False)
         time.sleep(0.15)
@@ -261,7 +261,7 @@ def run_boot(skip_to_menu: bool = False, choose: bool = True, signed: bool = Fal
     screen.enter()
     try:
         if skip_to_menu:
-            screen.left = ["GHOST DESK"]
+            screen.left = ["ghost desk"]
             _paint(screen.left, 4, False)
         else:
             screen.play_checks(signed=signed)

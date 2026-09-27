@@ -1,10 +1,10 @@
 """Boot and session screens: photo on the right, log on the left."""
 
-from ghost_desk.face import HOOD, render_ansi, render_blocks
+from ghost_desk.face import GHOST, render_ansi, render_blocks
 
 
-def test_portrait_ansi_is_the_photo_not_a_drawing():
-    assert HOOD.is_file()
+def test_portrait_ansi_is_the_ghost_not_a_drawing():
+    assert GHOST.is_file()
     rows = render_ansi()
     blob = "\n".join(rows)
     assert rows

@@ -29,10 +29,10 @@ def test_conversation_prompt_talks_to_the_person(tmp_path):
         memory.close()
 
 
-def test_side_portrait_uses_the_photo_and_moves_while_working():
-    from ghost_desk.face import HOOD, activity_for, render_blocks
+def test_side_portrait_uses_the_ghost_and_moves_while_working():
+    from ghost_desk.face import GHOST, activity_for, render_blocks
 
-    assert HOOD.is_file()
+    assert GHOST.is_file()
     still = render_blocks(bob=0)
     moving = render_blocks(bob=1)
     assert still and still[0][0][1] != ""

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import time
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 
@@ -32,6 +33,25 @@ def session_chrome() -> dict:
         "ghost_width": SESSION_WIDTH,
         "ghost_height": SESSION_HEIGHT,
     }
+
+
+def _dwidth(text: str) -> int:
+    """Cell width, counting wide characters as two."""
+    return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
+
+
+def _speech(rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Rounded speech bubble. The little tail points right, toward the ghost."""
+    width = max(_dwidth(text) for _, text in rows)
+    out: list[tuple[str, str]] = [("class:bubble", "╭" + "─" * (width + 2) + "╮\n")]
+    for style, text in rows:
+        out.append(("class:bubble", "│ "))
+        out.append((style, text + " " * (width - _dwidth(text))))
+        out.append(("class:bubble", " │\n"))
+    out.append(("class:bubble", "╰" + "─" * (width + 2) + "╯\n"))
+    out.append(("class:bubble", " " * (width - 1) + "╰╮\n"))
+    out.append(("class:bubble", " " * width + "╰──\n"))
+    return out
 
 
 HELP = """\
@@ -410,14 +430,18 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     def chat_fragments():
         fragments: list[tuple[str, str]] = []
         if not lines and not state["stream"] and not state["busy"]:
+            fragments.append(("class:muted", "\n"))
             fragments.extend(
-                [
-                    ("class:muted", "\n"),
-                    ("class:brand", "GHOST DESK\n"),
-                    ("class:reply", "Your brain, your machine, your notes.\n\n"),
-                    ("class:muted", "Reads stay local. Writes wait for a yes.\n"),
-                    ("class:muted", "Type /help for commands, or just talk.\n"),
-                ]
+                _speech(
+                    [
+                        ("class:brand", "ghost desk"),
+                        ("class:reply", ""),
+                        ("class:reply", "Your brain, your machine, your notes."),
+                        ("class:reply", ""),
+                        ("class:muted", "Reads stay local. Writes wait for a yes."),
+                        ("class:muted", "Type /help for commands, or just talk."),
+                    ]
+                )
             )
             return fragments
         for role, text in lines:
@@ -608,7 +632,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         height=1,
         content=FormattedTextControl(
             lambda: [
-                ("class:brand", " GHOST DESK "),
+                ("class:brand", " ghost desk "),
                 ("class:muted", f" ·  {n_tools} tools  ·  {skill_names}  ·  /help"),
             ]
         ),
@@ -656,6 +680,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 "composer": "bg:#161616 #f0f0f0",
                 "prompt": "bg:#161616 #9a9a9a",
                 "brand": "bold #f0abfc",
+                "bubble": "#f0abfc",
                 "caption": "#5a5a5a",
                 "divider": "#2e2e2e bg:#090909",
                 "user": "bold #f4f4f4",

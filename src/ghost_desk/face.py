@@ -1,10 +1,10 @@
-"""The side portrait. Same photo. Black stays black so it floats on the terminal."""
+"""The side portrait. A cute little ghost. Black stays black so it floats on the terminal."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-HOOD = Path(__file__).resolve().parent / "assets" / "hood.jpg"
+GHOST = Path(__file__).resolve().parent / "assets" / "ghost.png"
 
 BOOT_WIDTH = 36
 BOOT_HEIGHT = 32
@@ -12,6 +12,8 @@ SESSION_WIDTH = 30
 SESSION_HEIGHT = 38
 _BLACK = 16
 _DOT = 64
+# White-on-gray art needs a higher cut so the background drops to black.
+_DOT_BY_ASSET = {"ghost.png": 110}
 _BLOCK_CACHE: dict[tuple, list] = {}
 _ANSI_CACHE: dict[tuple, list[str]] = {}
 
@@ -40,7 +42,8 @@ def _load(path: Path, width: int, height: int):
     image = _crop_subject(image).convert("L")
     # Dots to pure white first: each output cell then measures dot density,
     # which survives the downscale instead of blurring into mush.
-    image = image.point(lambda v: 255 if v > _DOT else 0)
+    dot = _DOT_BY_ASSET.get(Path(path).name, _DOT)
+    image = image.point(lambda v: 255 if v > dot else 0)
     target_w, target_h = width, height * 2
     # Center-crop to an integer multiple of the target so the averaging
     # lands evenly instead of banding across dot rows.
@@ -90,7 +93,7 @@ def _cell(top, bottom) -> tuple[str, str]:
 
 def render_blocks(path: Path | None = None, *, width: int = 22, height: int = 26, bob: int = 0):
     """Grayscale density half-blocks from the photo. Bob is a blank row shift, not a new drawing."""
-    source = path or HOOD
+    source = path or GHOST
     key = (str(source), width, height, bob)
     cached = _BLOCK_CACHE.get(key)
     if cached is not None:
@@ -116,7 +119,7 @@ def render_blocks(path: Path | None = None, *, width: int = 22, height: int = 26
 
 def render_ansi(path: Path | None = None, *, width: int = BOOT_WIDTH, height: int = BOOT_HEIGHT) -> list[str]:
     """Same photo as ANSI truecolor rows for the boot screen."""
-    source = path or HOOD
+    source = path or GHOST
     key = (str(source), width, height)
     cached = _ANSI_CACHE.get(key)
     if cached is not None:
