@@ -1,7 +1,7 @@
 """Autumn leaves drifting through the ghost pane.
 
 One leaf every few seconds, a slow fall, a gentle sway. Ambient and sparse:
-at most three leaves at once, muted fall tones. Turn it off with
+at most five leaves at once, muted fall tones. Turn it off with
 GHOST_DESK_LEAVES=off.
 """
 
@@ -18,7 +18,7 @@ LEAF_CHAR = "\u2767"  # ❧ rotated floral heart: reads as a little leaf
 LEAF_COLORS = ("#c98f4e", "#a9663f", "#d4a94e", "#a85f5f")
 
 SPAWN_EVERY = 5.0  # seconds between leaves, ±30%
-MAX_LEAVES = 3
+MAX_LEAVES = 5
 FALL_SPEED = (1.1, 1.6)  # rows per second
 
 
@@ -67,7 +67,8 @@ class LeafField:
         for leaf in self.leaves:
             leaf.y += leaf.speed * dt
             leaf.x += math.sin(now * 0.9 + leaf.phase) * leaf.sway * dt
-        self.leaves = [leaf for leaf in self.leaves if leaf.y < height and -2 < leaf.x < width + 2]
+            leaf.x = min(max(leaf.x, 0.0), width - 1)
+        self.leaves = [leaf for leaf in self.leaves if leaf.y < height]
         return True
 
     def _spawn(self, width: int) -> Leaf:

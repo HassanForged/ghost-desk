@@ -43,6 +43,13 @@ def test_leaves_stay_capped():
     assert len(field.leaves) <= 2
 
 
+def test_default_cap_is_five():
+    field = LeafField()
+    for step in range(0, 400):
+        field.tick(step * 0.5, 30, 38)
+    assert len(field.leaves) <= 5
+
+
 def test_cells_stay_in_bounds_with_fall_colors():
     field = LeafField()
     for step in range(0, 400):
