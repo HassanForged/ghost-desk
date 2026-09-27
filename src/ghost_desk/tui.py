@@ -467,7 +467,18 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     chrome = session_chrome()
 
+    from ghost_desk.images import detect_protocol, install_picture
+
+    picture_protocol = detect_protocol()
+
     def ghost_fragments():
+        caption = state["activity"] if state["busy"] else "idle"
+        pad = max(0, (chrome["ghost_width"] - len(caption)) // 2)
+        if picture_protocol:
+            # The real picture paints over this blank space after each flush.
+            fragments = [("", " " * (chrome["ghost_width"] + 1) + "\n")] * chrome["ghost_height"]
+            fragments.append(("class:caption", " " * pad + caption))
+            return fragments
         # The ghost is still when idle and breathes while working.
         bob = state["tick"] % 2 if state["busy"] else 0
         rows = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=bob)
@@ -475,8 +486,6 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         for row in rows:
             fragments.extend(row)
             fragments.append(("", "\n"))
-        caption = state["activity"] if state["busy"] else "idle"
-        pad = max(0, (chrome["ghost_width"] - len(caption)) // 2)
         fragments.append(("class:caption", " " * pad + caption))
         return fragments
 
@@ -700,9 +709,13 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     app.pre_run_callables.append(startup)
     app.layout.focus(typed)
+    cleanup_picture = install_picture(
+        app.output, picture_protocol, chrome, lambda: (state["busy"], state["tick"])
+    )
     try:
         app.run()
     finally:
+        cleanup_picture()
         desk.stop()
         memory.close()
     return 0

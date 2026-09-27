@@ -19,6 +19,60 @@ TAGLINE = "Your brain, your machine, your notes."
 _ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 _GHOST_CACHE: list[str] | None = None
+_BOOT_PICTURE: str | None = "unset"  # protocol name, or None when unsupported
+_BOOT_PAINTED = False
+
+
+def _boot_picture_protocol() -> str | None:
+    global _BOOT_PICTURE
+    if _BOOT_PICTURE == "unset":
+        try:
+            from ghost_desk.images import detect_protocol
+
+            _BOOT_PICTURE = detect_protocol()
+        except Exception:
+            _BOOT_PICTURE = None
+    return _BOOT_PICTURE
+
+
+def _boot_picture_fits() -> bool:
+    try:
+        import shutil
+
+        return shutil.get_terminal_size().columns >= LEFT_COLS + 40
+    except Exception:
+        return False
+
+
+def _paint_boot_picture(protocol: str) -> None:
+    global _BOOT_PAINTED
+    if _BOOT_PAINTED:
+        return
+    _BOOT_PAINTED = True
+    try:
+        from ghost_desk.face import BOOT_HEIGHT, BOOT_WIDTH
+        from ghost_desk.images import place, show_sequence
+
+        _write("\x1b7" + place(1, LEFT_COLS + 3))
+        _write(show_sequence(protocol, cols=BOOT_WIDTH, rows=BOOT_HEIGHT))
+        _write("\x1b8")
+    except Exception:
+        pass
+
+
+def _clear_boot_picture() -> None:
+    global _BOOT_PAINTED
+    if not _BOOT_PAINTED:
+        return
+    _BOOT_PAINTED = False
+    protocol = _BOOT_PICTURE if _BOOT_PICTURE != "unset" else None
+    if protocol == "kitty":
+        try:
+            from ghost_desk.images import kitty_delete
+
+            _write(kitty_delete())
+        except Exception:
+            pass
 
 
 def _enable_windows_ansi() -> None:
@@ -55,7 +109,9 @@ def _visible(text: str) -> int:
 
 
 def _paint(left: list[str], level: int = 4, cursor: bool = False) -> None:
-    ghost = _ghost_rows()
+    protocol = _boot_picture_protocol()
+    picture = bool(protocol) and _boot_picture_fits()
+    ghost = [] if picture else _ghost_rows()
     rows = max(len(left) + 1, len(ghost), 16)
     _write("\033[H")
     for i in range(rows):
@@ -66,6 +122,8 @@ def _paint(left: list[str], level: int = 4, cursor: bool = False) -> None:
         pad = max(2, LEFT_COLS - _visible(shown))
         _write("\033[2K" + TEXT + shown + RESET + (" " * pad) + art + "\n")
     _write("\033[J")
+    if picture and protocol:
+        _paint_boot_picture(protocol)
 
 
 def _dots(left: list[str], level: int, stem: str) -> None:
@@ -187,6 +245,7 @@ class BootScreen:
         self._trap()
 
     def leave(self) -> None:
+        _clear_boot_picture()
         _write(SHOW + RESET)
         self._armed = False
 
