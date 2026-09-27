@@ -27,7 +27,7 @@ from ghost_desk.tools import schemas
 def header_status(*, busy: bool, phase: str = "thinking", elapsed: int = 0) -> str:
     """Right side of the session header. The ghost is the identity here; the brain stays under /model."""
     if busy:
-        return f"haunting  ·  {phase} {elapsed}s"
+        return f"rattling chains…  {elapsed}s"
     return "haunting"
 
 
@@ -205,6 +205,7 @@ def _slash(
     command = head.lower().strip()
     rest = rest.strip()
     if command in {"quit", "exit"}:
+        console.print("the ghost fades…")
         return "quit"
     if command == "help":
         console.print(HELP, markup=False)
@@ -215,7 +216,7 @@ def _slash(
         session.history = []
         session.plan = fresh.plan
         session.model_override = ""
-        console.print(f"new conversation {session.id}")
+        console.print("a fresh haunting.")
         return "ok"
     if command == "personality":
         name = rest.lower()
@@ -627,7 +628,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                     if not check.ok:
                         lines.append(("note", "✗ " + check.line()))
             except Exception as exc:
-                lines.append(("note", str(exc)))
+                lines.append(("note", "something moved in the dark: " + str(exc)))
             state["stream"] = ""
             state["activity"] = "idle"
             state["busy"] = False
