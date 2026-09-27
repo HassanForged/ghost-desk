@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ghost_desk.client import ChatResponse, OpenAIChatClient
+from ghost_desk.client import ChatResponse, ClientError, OpenAIChatClient
 from ghost_desk.config import Config
 from ghost_desk.providers.base import Provider, chosen_base
 
@@ -39,7 +39,17 @@ class Ollama(Provider):
 
     def chat(self, messages, tools=None, *, model=None, stream=False, on_text=None) -> ChatResponse:
         client = OpenAIChatClient(self._runtime(), sdk=self._sdk, attempts=1)
-        return client.complete(messages, tools, model=model or self.model, stream=stream, on_text=on_text)
+        try:
+            return client.complete(messages, tools, model=model or self.model, stream=stream, on_text=on_text)
+        except ClientError as exc:
+            text = str(exc).lower()
+            if tools and "400" in text and "tool" in text:
+                # This local model has no tool support; degrade to a plain
+                # prompt instead of hard-failing the turn.
+                return client.complete(
+                    messages, None, model=model or self.model, stream=stream, on_text=on_text
+                )
+            raise
 
     def list_models(self) -> list[str]:
         return [self.model] if self.model else []

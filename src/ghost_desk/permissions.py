@@ -32,6 +32,10 @@ _WRITE_HINT = re.compile(
 _WIN_ABS = re.compile(r"[A-Za-z]:\\[^\s\"']+")
 _POSIX_ABS = re.compile(r"(?:^|[\s\"'=])(/(?!/)[^\s\"']+)")
 _SPLIT = re.compile(r"[\n;&|]+")
+# Relative traversal (cat ../../secret.txt) and command substitution (echo $(cat /etc/passwd))
+# hide paths from the absolute-path checks below. Never treat them as readonly.
+_TRAVERSAL = re.compile(r"(?:^|[\s\"';])(?:\.\.(?:/|\\))")
+_SUBST = re.compile(r"\$\(|`")
 _OPEN_APP = r'(?:chrome|msedge|firefox|notepad|explorer|calc|"google chrome")'
 _OPEN_CMD = re.compile(
     rf'(?i)^(?:start-process|start)\s+(?:""\s+)?{_OPEN_APP}(?:\s+https?://\S+)?\s*$'
@@ -108,7 +112,11 @@ def shell_kind(command: str, workspace: Path) -> str:
             return "secret"
         if not inside_workspace(path, workspace):
             return "outside"
+    if _TRAVERSAL.search(command):
+        return "outside"
     worst = "read"
+    if _SUBST.search(command):
+        worst = "write"
     for part in _SPLIT.split(command):
         piece = part.strip()
         if not piece:

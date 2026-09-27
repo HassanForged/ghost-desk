@@ -1,4 +1,7 @@
-"""User-declared jobs, plus a monthly digest. Repeated topics are listed, not acted on."""
+"""User-declared jobs, plus a monthly digest. Repeated topics are listed, not acted on.
+
+Schedules run on the user's local wall clock, not UTC: a daily job fires at
+local midnight, not midnight UTC."""
 
 from __future__ import annotations
 
@@ -8,6 +11,10 @@ from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 
 from ghost_desk.memory import Memory
+
+
+def _local_now() -> datetime:
+    return datetime.now().astimezone()
 
 _EMOTION = {
     "stuck",
@@ -90,8 +97,12 @@ def minute_key(now: datetime) -> str:
     return now.replace(second=0, microsecond=0).isoformat()
 
 
+_observe_calls = 0
+
+
 def observe_message(memory: Memory, text: str, now: datetime | None = None) -> None:
-    now = now or datetime.now(timezone.utc)
+    global _observe_calls
+    now = now or _local_now()
     words = re.findall(r"[A-Za-z][A-Za-z'-]{3,}", text or "")
     lowered = [word.lower() for word in words]
     emotion = next((word for word in lowered if word in _EMOTION), "")
@@ -104,7 +115,10 @@ def observe_message(memory: Memory, text: str, now: datetime | None = None) -> N
     stamp = now.replace(microsecond=0).isoformat()
     for word in sorted(set(keywords)):
         memory.bump_topic(word, emotion, action, text[:180], stamp)
-    memory.flag_recurring(now)
+    _observe_calls += 1
+    if _observe_calls % 10 == 1:
+        # The full recurring-topics scan is periodic, not per message.
+        memory.flag_recurring(now)
     from ghost_desk.context import remember
     from ghost_desk.plan import facts_in
 
@@ -116,7 +130,7 @@ def observe_message(memory: Memory, text: str, now: datetime | None = None) -> N
 
 
 def digest_due(memory: Memory, now: datetime | None = None) -> bool:
-    now = now or datetime.now(timezone.utc)
+    now = now or _local_now()
     latest = memory.latest_digest()
     if latest is None:
         return True
@@ -127,7 +141,7 @@ def digest_due(memory: Memory, now: datetime | None = None) -> bool:
 
 
 def build_digest(memory: Memory, now: datetime | None = None) -> str:
-    now = now or datetime.now(timezone.utc)
+    now = now or _local_now()
     lines = [
         f"# Ghost Desk digest {now.date().isoformat()}",
         "",
@@ -171,7 +185,7 @@ def write_digest(memory: Memory, now: datetime | None = None) -> str:
     memory.add_digest(body)
     path = memory.data_dir / "digests"
     path.mkdir(parents=True, exist_ok=True)
-    stamp = (now or datetime.now(timezone.utc)).strftime("%Y%m%d")
+    stamp = (now or _local_now()).strftime("%Y%m%d")
     (path / f"{stamp}.md").write_text(body, encoding="utf-8")
     return body
 
@@ -205,7 +219,7 @@ def run_due(
     runner: Callable[[str], str],
     now: datetime | None = None,
 ) -> list[str]:
-    now = now or datetime.now(timezone.utc)
+    now = now or _local_now()
     ran: list[str] = []
     current = minute_key(now)
     for job in memory.list_jobs():
@@ -248,6 +262,6 @@ class BackgroundDesk:
     def _loop(self) -> None:
         while not self._stop.wait(self.interval):
             try:
-                run_due(self.memory, self.runner, datetime.now())
+                run_due(self.memory, self.runner, _local_now())
             except Exception:
                 continue

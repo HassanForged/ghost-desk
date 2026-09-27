@@ -83,19 +83,38 @@ def _pick(mapping: dict | None) -> dict[str, str]:
 
 def _env_map() -> dict[str, str]:
     raw: dict[str, str] = {}
+    # Exact-case scan of a plain dict: on Windows os.environ is
+    # case-insensitive, so a stray MODEL from another tool must not silently
+    # override the model. GHOST_-prefixed names are the documented form and
+    # always win over bare names.
+    environ = dict(os.environ)
     for key in KEYS:
-        if key in os.environ and os.environ[key].strip():
-            raw[key] = os.environ[key]
+        if key in environ and environ[key].strip():
+            raw[key] = environ[key]
         prefixed = "GHOST_" + key.upper()
-        if prefixed in os.environ and os.environ[prefixed].strip():
-            raw[key] = os.environ[prefixed]
+        if prefixed in environ and environ[prefixed].strip():
+            raw[key] = environ[prefixed]
     return raw
+
+
+def _strip_comment(line: str) -> str:
+    """Cut a trailing # comment, but keep # inside quotes or inside a value."""
+    in_single = in_double = False
+    for index, char in enumerate(line):
+        if char == "'" and not in_double:
+            in_single = not in_single
+        elif char == '"' and not in_single:
+            in_double = not in_double
+        elif char == "#" and not in_single and not in_double:
+            if index == 0 or line[index - 1] in " \t":
+                return line[:index]
+    return line
 
 
 def _flat_yaml(text: str) -> dict[str, str]:
     loaded: dict[str, str] = {}
     for line in text.splitlines():
-        line = line.split("#", 1)[0].strip()
+        line = _strip_comment(line).strip()
         if not line or ":" not in line:
             continue
         key, value = line.split(":", 1)

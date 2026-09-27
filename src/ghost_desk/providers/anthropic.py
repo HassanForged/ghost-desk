@@ -32,6 +32,9 @@ class Anthropic(Provider):
         raise OAuthError(NOTE)
 
     def chat(self, messages, tools=None, *, model=None, stream=False, on_text=None) -> ChatResponse:
+        # Blocking POST, not true SSE streaming: the full reply is delivered
+        # to on_text in one callback. Kept simple deliberately; the agent loop
+        # only needs the text once.
         key = self.access_token or self._config.api_key
         if not key:
             raise MissingKey("No API key. Run ghost setup.")
@@ -39,7 +42,7 @@ class Anthropic(Provider):
         system, converted = _split(messages)
         payload: dict = {
             "model": model or self.model,
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "messages": converted,
         }
         if system:
@@ -81,6 +84,7 @@ def _tool(tool: dict) -> dict:
 def _split(messages) -> tuple[str, list]:
     system: list[str] = []
     converted: list = []
+    tool_group: dict | None = None
     for message in messages:
         role = message.get("role")
         content = message.get("content") or ""
@@ -89,21 +93,22 @@ def _split(messages) -> tuple[str, list]:
         if role == "system":
             if content:
                 system.append(content)
+            tool_group = None
             continue
         if role == "tool":
-            converted.append(
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": message.get("tool_call_id") or "",
-                            "content": content,
-                        }
-                    ],
-                }
-            )
+            # Consecutive tool results share one user message; separate
+            # user messages would break Anthropic's role alternation.
+            block = {
+                "type": "tool_result",
+                "tool_use_id": message.get("tool_call_id") or "",
+                "content": content,
+            }
+            if tool_group is None:
+                tool_group = {"role": "user", "content": []}
+                converted.append(tool_group)
+            tool_group["content"].append(block)
             continue
+        tool_group = None
         if role == "assistant":
             blocks: list = []
             if content:

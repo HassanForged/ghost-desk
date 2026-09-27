@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -12,6 +13,10 @@ from pathlib import Path
 from ghost_desk.agent import DeskSession, run_turn
 from ghost_desk.config import Config
 from ghost_desk.memory import Memory
+
+# A network blip on getUpdates backs off and retries; only a long outage exits.
+_POLL_RETRY_DELAY = 30.0
+_MAX_POLL_FAILURES = 10
 
 HELP = """Ghost Desk on your phone.
 Say something and the desk answers with the brain you set up.
@@ -190,7 +195,10 @@ def reply_for(text: str, *, config: Config, memory: Memory, session: DeskSession
         session.history = []
         session.plan = fresh.plan
         return f"new conversation {session.id}"
-    result = run_turn(stripped, config=config, memory=memory, session=session, client=client, depth=0)
+    result = run_turn(
+        stripped, config=config, memory=memory, session=session, client=client, depth=0,
+        persist_session=False,
+    )
     return result.text or "(empty)"
 
 
@@ -243,6 +251,7 @@ def serve(
     memory = Memory(data)
     sessions = load_session_map(data)
     rounds = 0
+    poll_failures = 0
     try:
         while max_rounds is None or rounds < max_rounds:
             rounds += 1
@@ -251,7 +260,12 @@ def serve(
                 batch = channel.poll(offset)
             except GatewayError as exc:
                 output(redact(str(exc), token))
-                return 2
+                poll_failures += 1
+                if poll_failures > _MAX_POLL_FAILURES:
+                    return 2
+                time.sleep(_POLL_RETRY_DELAY)
+                continue
+            poll_failures = 0
             if not batch:
                 if max_rounds is not None:
                     break
@@ -270,6 +284,8 @@ def serve(
                 except GatewayError as exc:
                     output(redact(str(exc), token))
                     return 2
+                except Exception as exc:
+                    output(redact(f"update {item.update_id} failed: {exc}", token))
                 save_session_map(data, sessions)
                 save_offset(data, item.update_id + 1)
     finally:

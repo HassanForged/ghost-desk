@@ -19,8 +19,8 @@ from ghost_desk.permissions import PermissionGate
 from ghost_desk.plan import PlanSession, verify_checklist
 from ghost_desk.verify import Check, VerificationReport, repair_near_facts, verify_facts
 from ghost_desk.environment import build_environment_hints
-from ghost_desk.skills import render_parents
-from ghost_desk.tools import execute, schemas, tool_message
+from ghost_desk.skills import Skill
+from ghost_desk.tools import ToolOutcome, execute, schemas, tool_message
 
 _BASE = """You are the ghost in ghost desk — a small ghost that haunts this person's terminal and their machine.
 You are quiet, dry, and direct. Short sentences, lowercase when it feels natural. Never say "as an AI language model".
@@ -66,6 +66,8 @@ class DeskSession:
     parents_text: str = ""
     personality: str = "helpful"
     frozen_prompt: str = ""
+    gate: PermissionGate | None = None
+    unfinished_nudges: int = 0
 
 
 def _topic(text: str) -> str:
@@ -77,12 +79,24 @@ def _note_words(text: str) -> list[str]:
     return re.findall(r"[A-Za-z0-9_-]{4,}", (text or "").lower())
 
 
+def verified_notes_block(memory: Memory, user_text: str, limit: int = 5) -> str:
+    """Notes relevant to this turn's message. Empty when the message has no query words."""
+    if not _note_words(user_text):
+        return ""
+    notes = memory.search_notes(_note_words(user_text), limit=limit)
+    if not notes:
+        return ""
+    lines = [f"- {note['topic']}: {note['body']}" for note in notes]
+    return "Verified notes:\n" + "\n".join(lines)
+
+
 def system_prompt(
     session: DeskSession,
     memory: Memory,
     user_text: str,
     workspace: Path | None = None,
     data_dir: Path | None = None,
+    include_notes: bool = True,
 ) -> str:
     parts = [_BASE, PERSONALITIES.get(session.personality, PERSONALITIES["helpful"])]
     if workspace is not None:
@@ -99,10 +113,10 @@ def system_prompt(
             parts.append(loaded)
     if session.parents_text:
         parts.append("Skills:\n" + session.parents_text)
-    notes = memory.search_notes(_note_words(user_text), limit=5)
-    if notes:
-        lines = [f"- {note['topic']}: {note['body']}" for note in notes]
-        parts.append("Verified notes:\n" + "\n".join(lines))
+    if include_notes:
+        block = verified_notes_block(memory, user_text)
+        if block:
+            parts.append(block)
     draft = session.plan.draft
     if draft is not None and draft.status == "approved":
         checklist = "\n".join(f"- {item}" for item in draft.checklist)
@@ -163,10 +177,20 @@ def _unfinished_work(session: DeskSession, workspace: Path, reply: str, user: st
     )
 
 
-def _refuse_done_without_files(user: str, reply: str, workspace: Path) -> str:
-    if not re.search(r"(?i)\b(done|finished|complete|written)\b", f"{user}\n{reply}"):
+def _refuse_done_without_files(
+    user: str, reply: str, workspace: Path, report: VerificationReport | None = None
+) -> str:
+    # Only the ghost's own completion claim counts; the user's words are not evidence.
+    if not re.search(r"(?i)\b(done|finished|complete|written)\b", reply or ""):
         return reply
-    missing = _missing_named(workspace, _named_outputs(user, reply))
+    written = set()
+    if report is not None:
+        written = {
+            Path(check.detail).name
+            for check in report.checks
+            if check.action == "file_write" and check.ok
+        }
+    missing = [name for name in _missing_named(workspace, _named_outputs(reply)) if name not in written]
     if not missing:
         return reply
     return "Not done. Missing: " + ", ".join(missing)
@@ -213,24 +237,35 @@ def run_turn(
     session: DeskSession,
     client=None,
     gate: PermissionGate | None = None,
+    ask: Callable[[str], bool] | None = None,
     spawn_fn: Callable | None = None,
     on_text: Callable[[str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     depth: int = 0,
     budget: Budget | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    persist_session: bool = True,
 ) -> AgentResult:
     budget = budget or Budget()
     status = on_status or (lambda _note: None)
     workspace = config.workspace()
-    gate = gate or PermissionGate(workspace)
+    if gate is None:
+        gate = session.gate
+    if gate is None:
+        gate = PermissionGate(workspace, ask=ask)
+    # The session keeps the gate: approvals carry across turns.
+    session.gate = gate
     report = VerificationReport()
+    # Fresh turn, fresh nudge budget: the cap is per user message, not forever.
+    session.unfinished_nudges = 0
 
     if depth == 0:
         from ghost_desk.context import draft_lesson, expand_mentions
 
         text = expand_mentions(text, workspace)
         draft_lesson(config.data_path(), text)
-        (config.data_path() / "current_session.txt").write_text(session.id, encoding="utf-8")
+        if persist_session:
+            (config.data_path() / "current_session.txt").write_text(session.id, encoding="utf-8")
         _keep_facts(config.data_path(), text)
 
     user_message = {"role": "user", "content": text}
@@ -281,10 +316,14 @@ def run_turn(
 
     if not session.frozen_prompt:
         session.frozen_prompt = system_prompt(
-            session, memory, "", workspace=workspace, data_dir=config.data_path()
+            session, memory, "", workspace=workspace, data_dir=config.data_path(), include_notes=False
         )
     prompt = session.frozen_prompt
-    messages: list[dict] = [{"role": "system", "content": prompt}, *session.history]
+    messages: list[dict] = [{"role": "system", "content": prompt}]
+    notes_block = verified_notes_block(memory, text)
+    if notes_block:
+        messages.append({"role": "system", "content": notes_block})
+    messages.extend(session.history)
     tools = schemas(include_ghost=depth == 0 and spawn_fn is not None)
     model = session.model_override or config.model
     tokens = 0
@@ -294,6 +333,9 @@ def run_turn(
     used_fallback = False
 
     for _turn in range(budget.max_turns):
+        if cancelled is not None and cancelled():
+            reason = "cancelled"
+            break
         if time.monotonic() - started > budget.max_seconds:
             reason = "wall_clock"
             break
@@ -346,7 +388,8 @@ def run_turn(
         if not response.tool_calls:
             final = response.text or ""
             nudge = _unfinished_work(session, workspace, final, text)
-            if nudge:
+            if nudge and session.unfinished_nudges < 2:
+                session.unfinished_nudges += 1
                 note = {"role": "user", "content": nudge}
                 messages.append(note)
                 session.history.append(note)
@@ -372,7 +415,14 @@ def run_turn(
                 session.history.append(tool_payload)
                 _log(memory, session, "tool", ghost_text, tool_payload)
                 continue
-            outcome = execute(call.name, call.arguments, gate)
+            try:
+                outcome = execute(call.name, call.arguments, gate)
+            except Exception as exc:
+                detail = json.dumps(call.arguments)[:200]
+                crashed = Check(call.name, detail, "crashed", False, f"tool crashed: {exc}")
+                outcome = ToolOutcome(
+                    call.name, False, {"ok": False, "error": f"tool crashed: {exc}"}, crashed
+                )
             if outcome.check is not None:
                 report.add(outcome.check)
             if outcome.name == "http_fetch" and outcome.ok:
@@ -395,7 +445,8 @@ def run_turn(
         if mutated:
             for check in verify_checklist(draft.checklist, workspace):
                 report.add(check)
-        repair_near_facts(draft.facts, workspace)
+        for repaired in repair_near_facts(draft.facts, workspace, gate=gate):
+            report.add(Check("fact_repair", repaired, "repaired", True, "email typo repaired"))
         for check in verify_facts(draft.facts, workspace):
             report.add(check)
         if any(not check.ok for check in report.checks):
@@ -407,7 +458,7 @@ def run_turn(
 
     record_verified(memory, session.id, report, _topic(text))
     report_text = report.text()
-    final = _refuse_done_without_files(text, final, workspace)
+    final = _refuse_done_without_files(text, final, workspace, report)
     if reason != "stop":
         final = f"Stopped: {reason}.\n{report_text}"
     elif report.checks:

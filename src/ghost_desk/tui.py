@@ -80,20 +80,6 @@ def _dwidth(text: str) -> int:
     return sum(2 if unicodedata.east_asian_width(ch) in "WF" else 1 for ch in text)
 
 
-def _speech(rows: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Rounded speech bubble. The little tail points right, toward the ghost."""
-    width = max(_dwidth(text) for _, text in rows)
-    out: list[tuple[str, str]] = [("class:bubble", "╭" + "─" * (width + 2) + "╮\n")]
-    for style, text in rows:
-        out.append(("class:bubble", "│ "))
-        out.append((style, text + " " * (width - _dwidth(text))))
-        out.append(("class:bubble", " │\n"))
-    out.append(("class:bubble", "╰" + "─" * (width + 2) + "╯\n"))
-    out.append(("class:bubble", " " * (width - 1) + "╰╮\n"))
-    out.append(("class:bubble", " " * width + "╰──\n"))
-    return out
-
-
 HELP = """\
 /help        show this list
 /new         start a fresh conversation
@@ -188,6 +174,32 @@ def _print_result(console: Console, result: AgentResult, streamed: bool) -> None
         console.print(f"  ✗ {check.line()}", markup=False, highlight=False)
 
 
+def _answer_pending(pending: dict, text: str) -> bool:
+    """Answer a live permission prompt. Returns False when the prompt already
+    expired (timeout) or was answered: late input is chat, never permission."""
+    event = pending.get("event")
+    if event is None:
+        return False
+    pending["yes"] = text.strip().lower() in {"y", "yes"}
+    event.set()
+    pending["event"] = None
+    return True
+
+
+def _visible_lines(history: list[dict]) -> list[tuple[str, str]]:
+    """Flatten a stored session history into the chat pane's (role, text) rows."""
+    shown: list[tuple[str, str]] = []
+    for message in history:
+        content = message.get("content")
+        if not content or not isinstance(content, str):
+            continue
+        if message.get("role") == "user":
+            shown.append(("you", content.strip()))
+        elif message.get("role") == "assistant":
+            shown.append(("ghost", content.strip()))
+    return shown
+
+
 def _slash(
     text: str,
     *,
@@ -216,6 +228,11 @@ def _slash(
         session.history = []
         session.plan = fresh.plan
         session.model_override = ""
+        replace = getattr(console, "replace", None)
+        if callable(replace):
+            # Full-screen mode: rebuild the visible chat instead of leaving
+            # the old transcript on screen.
+            replace([])
         console.print("a fresh haunting.")
         return "ok"
     if command == "personality":
@@ -294,6 +311,10 @@ def _slash(
         session.history = history
         session.plan = type(session.plan)()
         (config.data_path() / "current_session.txt").write_text(target, encoding="utf-8")
+        replace = getattr(console, "replace", None)
+        if callable(replace):
+            # Full-screen mode: show the resumed transcript, not the old one.
+            replace(_visible_lines(history))
         console.print(f"resumed {target} ({len(history)} messages)")
         return "ok"
     if command == "promote":
@@ -411,13 +432,27 @@ def _asker(console: Console | None, prompter: Callable[[str], str] | None):
 class _Log:
     """Slash commands write here. The chat pane reads it."""
 
-    def __init__(self, lines: list[tuple[str, str]], refresh: Callable[[], None]) -> None:
+    def __init__(self, lines: list[tuple[str, str]], refresh: Callable[[], None], lock=None) -> None:
         self.lines = lines
         self.refresh = refresh
+        self._lock = lock
 
     def print(self, *args, **_kwargs) -> None:
         text = " ".join(str(part) for part in args)
-        self.lines.append(("note", text))
+        if self._lock is not None:
+            with self._lock:
+                self.lines.append(("note", text))
+        else:
+            self.lines.append(("note", text))
+        self.refresh()
+
+    def replace(self, entries) -> None:
+        """Swap the visible chat (for /new and /resume)."""
+        if self._lock is not None:
+            with self._lock:
+                self.lines[:] = list(entries)
+        else:
+            self.lines[:] = list(entries)
         self.refresh()
 
 
@@ -437,20 +472,43 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     import threading
 
-    lines: list[tuple[str, str]] = []
+    lines: list[tuple[str, str]] = _visible_lines(session.history)
     pending: dict = {"event": None, "yes": False}
-    for message in session.history:
-        if message.get("role") == "user" and message.get("content"):
-            lines.append(("you", str(message["content"]).strip()))
-        elif message.get("role") == "assistant" and message.get("content"):
-            lines.append(("ghost", str(message["content"]).strip()))
-    state = {"activity": "idle", "tick": 0, "stream": "", "busy": False, "started": 0.0}
+    # The worker thread appends to lines while the render thread iterates
+    # them. Every mutation goes through add_line / bump_tool under this lock.
+    lines_lock = threading.Lock()
+
+    def add_line(role: str, text: str) -> None:
+        with lines_lock:
+            lines.append((role, text))
+
+    def bump_tool(name: str) -> None:
+        with lines_lock:
+            if lines and lines[-1][0] == "tool" and lines[-1][1].startswith(name):
+                prev = lines[-1][1]
+                if " ×" in prev:
+                    base, _, count = prev.rpartition(" ×")
+                    try:
+                        lines[-1] = ("tool", f"{base} ×{int(count) + 1}")
+                        return
+                    except ValueError:
+                        pass
+                else:
+                    lines[-1] = ("tool", f"{name} ×2")
+                    return
+            lines.append(("tool", name))
+
+    def snapshot_lines() -> list[tuple[str, str]]:
+        with lines_lock:
+            return list(lines)
+
+    state = {"activity": "idle", "tick": 0, "stream": "", "busy": False, "started": 0.0, "cancel": False}
 
     def refresh() -> None:
         if app.is_running:
             app.invalidate()
 
-    log = _Log(lines, refresh)
+    log = _Log(lines, refresh, lines_lock)
 
     def unattended(prompt: str) -> str:
         gate = PermissionGate(config.workspace(), ask=lambda _question: False)
@@ -462,6 +520,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             gate=gate,
             depth=0,
             spawn_fn=None,
+            persist_session=False,
         )
         return result.text
 
@@ -475,7 +534,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             fragments.append(("class:greet", _greeting().center(COL_W) + "\n"))
             fragments.append(("class:muted", "What do you want to do?".center(COL_W) + "\n"))
             return fragments
-        for role, text in lines:
+        for role, text in snapshot_lines():
             if role == "you":
                 fragments.extend(_bubble(text))
             elif role == "ghost":
@@ -548,17 +607,31 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     buffer = Buffer(multiline=True)
 
+    def ask_allow(question: str) -> bool:
+        event = threading.Event()
+        pending["event"] = event
+        pending["yes"] = False
+        add_line("ask", question + "  y/n")
+        app.invalidate()
+        answered = event.wait(timeout=180)
+        yes = answered and bool(pending["yes"])
+        # Expire the prompt: anything typed after the timeout is a new
+        # message, never an answer to this question.
+        pending["event"] = None
+        pending["yes"] = False
+        return yes
+
+    # One gate per session: an approved path stays approved across turns.
+    gate = PermissionGate(config.workspace(), ask=ask_allow)
+
     def submit() -> None:
         text = buffer.text
         buffer.reset()
-        if pending["event"] is not None:
-            pending["yes"] = text.strip().lower() in {"y", "yes"}
-            pending["event"].set()
-            pending["event"] = None
+        if _answer_pending(pending, text):
             return
         if not text.strip() or state["busy"]:
             return
-        lines.append(("you", text.strip()))
+        add_line("you", text.strip())
         handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root)
         if handled == "quit":
             app.exit(result=0)
@@ -567,6 +640,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             refresh()
             return
         state["busy"] = True
+        state["cancel"] = False
         state["activity"] = "working"
         state["stream"] = ""
         state["started"] = time.monotonic()
@@ -579,31 +653,8 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             def on_status(note: str) -> None:
                 state["activity"] = activity_for(note)
                 if note.startswith("tool "):
-                    name = note[5:].strip()
-                    if lines and lines[-1][0] == "tool" and lines[-1][1].startswith(name):
-                        prev = lines[-1][1]
-                        if " ×" in prev:
-                            base, _, count = prev.rpartition(" ×")
-                            try:
-                                lines[-1] = ("tool", f"{base} ×{int(count) + 1}")
-                            except ValueError:
-                                lines.append(("tool", name))
-                        else:
-                            lines[-1] = ("tool", f"{name} ×2")
-                    else:
-                        lines.append(("tool", name))
+                    bump_tool(note[5:].strip())
                 app.invalidate()
-
-            def ask_allow(question: str) -> bool:
-                event = threading.Event()
-                pending["event"] = event
-                pending["yes"] = False
-                lines.append(("ask", question + "  y/n"))
-                app.invalidate()
-                event.wait(timeout=180)
-                return bool(pending["yes"])
-
-            gate = PermissionGate(config.workspace(), ask=ask_allow)
 
             def spawn_fn(**kwargs):
                 return spawn(client_factory=build_client, **kwargs)
@@ -618,18 +669,21 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                     spawn_fn=spawn_fn,
                     on_text=on_text,
                     on_status=on_status,
+                    cancelled=lambda: state["cancel"],
                 )
-                shown = state["stream"] or result.text
-                if not state["stream"]:
-                    lines.append(("ghost", shown))
+                if result.stop_reason == "cancelled":
+                    # The user moved on: drop any late streamed text.
+                    state["stream"] = ""
+                    add_line("note", "cancelled")
                 else:
-                    lines.append(("ghost", state["stream"]))
-                for check in result.report.checks:
-                    if not check.ok:
-                        lines.append(("note", "✗ " + check.line()))
+                    add_line("ghost", state["stream"] or result.text)
+                    for check in result.report.checks:
+                        if not check.ok:
+                            add_line("note", "✗ " + check.line())
             except Exception as exc:
-                lines.append(("note", "something moved in the dark: " + str(exc)))
+                add_line("note", "something moved in the dark: " + str(exc))
             state["stream"] = ""
+            state["cancel"] = False
             state["activity"] = "idle"
             state["busy"] = False
             status.set("ready")
@@ -650,8 +704,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     @bindings.add("c-c")
     def _cancel(event) -> None:
         if state["busy"]:
-            state["activity"] = "idle"
-            lines.append(("note", "cancelled"))
+            state["cancel"] = True
             return
         app.exit(result=0)
 
@@ -683,23 +736,6 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 app.invalidate()
 
     ghost = Window(
-        content=FormattedTextControl(ghost_fragments),
-        width=chrome["ghost_width"] + 1,
-        style="class:side",
-        dont_extend_width=True,
-    )
-    chat = Window(
-        content=FormattedTextControl(chat_fragments),
-        wrap_lines=True,
-        right_margins=[ScrollbarMargin()],
-        style="class:chat",
-    )
-    header = Window(
-        height=1,
-        content=FormattedTextControl(header_fragments),
-        style="class:header",
-    )
-    ghost = Window(
         height=chrome["ghost_height"],
         content=FormattedTextControl(ghost_fragments),
         style="class:side",
@@ -708,6 +744,11 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         content=FormattedTextControl(chat_fragments),
         wrap_lines=True,
         style="class:chat",
+    )
+    header = Window(
+        height=1,
+        content=FormattedTextControl(header_fragments),
+        style="class:header",
     )
     chips = Window(
         height=1,
@@ -890,11 +931,14 @@ def run_tui(
             gate=gate,
             depth=0,
             spawn_fn=None,
+            persist_session=False,
         )
         return result.text
 
     desk = BackgroundDesk(memory, unattended)
     desk.start()
+    # One gate for the whole session: approved paths stay approved across turns.
+    gate = PermissionGate(config.workspace(), ask=_asker(console, ask))
     try:
         while True:
             try:
@@ -936,8 +980,6 @@ def run_tui(
                     return
                 if note == "fallback provider":
                     console.print("  ● switching brain", style="dim", markup=False)
-
-            gate = PermissionGate(config.workspace(), ask=_asker(console, ask))
 
             def spawn_fn(**kwargs):
                 return spawn(client_factory=build_client, **kwargs)

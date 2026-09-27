@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -98,7 +99,11 @@ def load_all(root: Path) -> list[Skill]:
         return []
     skills: list[Skill] = []
     for path in sorted(root.rglob("*.md")):
-        skills.append(parse_skill(path.read_text(encoding="utf-8"), path))
+        try:
+            skills.append(parse_skill(path.read_text(encoding="utf-8"), path))
+        except (ValueError, OSError) as exc:
+            # One malformed skill must not crash startup.
+            print(f"ghost_desk: skipping malformed skill {path}: {exc}", file=sys.stderr)
     return skills
 
 

@@ -111,5 +111,14 @@ class Compactor:
         }
         return [head, *messages[cut:]]
 
-    def wait_if_needed(self, messages: list[dict], on_status: Callable[[str], None] | None) -> None:
-        return
+    def wait_if_needed(
+        self, messages: list[dict], on_status: Callable[[str], None] | None, timeout: float = 15.0
+    ) -> None:
+        """Block until the background summarizer finishes (or the timeout hits),
+        so apply() actually enforces the window instead of racing it."""
+        thread = self._thread
+        if thread is None or not thread.is_alive():
+            return
+        if on_status is not None:
+            on_status("compacting memory")
+        thread.join(timeout=timeout)

@@ -94,10 +94,15 @@ def verify_read(path: Path, content: str, *, truncated: bool = False) -> Check:
     return Check("file_read", str(path), content, True, note)
 
 
-def repair_near_facts(facts: list[str], workspace: Path) -> None:
-    """Replace a one-letter email miss with the exact address from the user."""
+def repair_near_facts(facts: list[str], workspace: Path, gate=None) -> list[str]:
+    """Replace a one-letter email miss with the exact address from the user.
+
+    Repairs go through the permission gate like any other write; a refused
+    path is left alone. Returns the paths that were repaired.
+    """
+    repaired: list[str] = []
     if not facts or not workspace.exists():
-        return
+        return repaired
     for path in workspace.rglob("*"):
         if not path.is_file() or path.suffix.lower() not in {".html", ".css", ".js", ".md", ".txt", ".json"}:
             continue
@@ -112,7 +117,16 @@ def repair_near_facts(facts: list[str], workspace: Path) -> None:
                 continue
             updated = re.sub(re.escape(local) + r"@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", fact, updated)
         if updated != body:
-            path.write_text(updated, encoding="utf-8")
+            if gate is not None:
+                decision = gate.check_write(str(path))
+                if not decision.allowed:
+                    continue
+            try:
+                path.write_text(updated, encoding="utf-8")
+            except OSError:
+                continue
+            repaired.append(str(path))
+    return repaired
 
 
 def verify_facts(facts: list[str], workspace: Path) -> list[Check]:

@@ -309,7 +309,10 @@ def _file_write(raw: str, content: str, gate: PermissionGate) -> ToolOutcome:
     if claimed in gate.claimed:
         return _refused("file_write", "another ghost is already writing this file")
     gate.claimed.add(claimed)
-    path.write_text(content, encoding="utf-8")
+    try:
+        path.write_text(content, encoding="utf-8")
+    finally:
+        gate.claimed.discard(claimed)
     check = verify_write(path, content)
     return ToolOutcome(
         "file_write",

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -127,26 +128,36 @@ def _bucket_path(data_dir: Path, bucket: str) -> tuple[Path, int]:
     return Path(data_dir) / "MEMORY.md", MEMORY_CAP
 
 
+_remember_lock = threading.Lock()
+
+
 def remember(data_dir: Path, bucket: str, line: str) -> bool:
-    """Append one bullet. Duplicates are skipped. The file stays under its cap."""
+    """Append one bullet. Duplicates are skipped. The file stays under its cap.
+
+    The read-modify-write is locked and the write is atomic (temp + rename),
+    so a background job thread cannot interleave or clobber a main-thread update.
+    """
     text = " ".join((line or "").split())
     if not text:
         return False
     path, limit = _bucket_path(data_dir, bucket)
     path.parent.mkdir(parents=True, exist_ok=True)
-    current = path.read_text(encoding="utf-8") if path.is_file() else ("# User\n" if bucket == "user" else "# Memory\n")
-    bullet = f"- {text[:400]}"
-    if bullet in current:
-        return False
-    updated = (current.rstrip() + "\n" + bullet + "\n").strip() + "\n"
-    if len(updated) > limit:
-        lines = updated.splitlines()
-        head = lines[0] if lines else "# Memory"
-        tail = [item for item in lines[1:] if item.startswith("- ")]
-        while tail and len(head + "\n" + "\n".join(tail) + "\n") > limit:
-            tail.pop(0)
-        updated = head + "\n" + "\n".join(tail) + "\n"
-    path.write_text(updated, encoding="utf-8")
+    with _remember_lock:
+        current = path.read_text(encoding="utf-8") if path.is_file() else ("# User\n" if bucket == "user" else "# Memory\n")
+        bullet = f"- {text[:400]}"
+        if bullet in current:
+            return False
+        updated = (current.rstrip() + "\n" + bullet + "\n").strip() + "\n"
+        if len(updated) > limit:
+            lines = updated.splitlines()
+            head = lines[0] if lines else "# Memory"
+            tail = [item for item in lines[1:] if item.startswith("- ")]
+            while tail and len(head + "\n" + "\n".join(tail) + "\n") > limit:
+                tail.pop(0)
+            updated = head + "\n" + "\n".join(tail) + "\n"
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(updated, encoding="utf-8")
+        os.replace(tmp, path)
     return True
 
 
@@ -239,11 +250,19 @@ def make_fallback(config: Config):
     key = os.environ.get("GHOST_FALLBACK_API_KEY", "").strip() or config.api_key
     if mode == "local":
         key = ""
+    base_url = os.environ.get("GHOST_FALLBACK_BASE_URL", "").strip()
+    if not base_url and provider.strip().lower() == (config.provider or "").strip().lower():
+        # Same brain, different model: the primary URL is the right URL.
+        base_url = config.base_url or ""
     alt = replace(
         config,
         provider=provider,
         model=(getattr(config, "fallback_model", "") or "").strip() or config.model,
         auth_mode=mode,
         api_key=key,
+        # Never inherit the primary's base_url for a different host: it would
+        # send the fallback key to the wrong server. Unset means the fallback
+        # provider's own default.
+        base_url=base_url or None,
     )
     return build_client(alt)

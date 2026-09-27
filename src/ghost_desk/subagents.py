@@ -68,10 +68,13 @@ def route(kind: str, config: Config) -> Config:
 def write_handoff(handoff: Handoff, data_dir, task: str):
     from pathlib import Path
     from datetime import datetime, timezone
+    from uuid import uuid4
 
     folder = Path(data_dir) / "handoffs"
     folder.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    # Microseconds plus a random suffix: two handoffs in the same second
+    # must not overwrite each other.
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S-%f") + "-" + uuid4().hex[:6]
     path = folder / f"{stamp}.md"
     body = "\n".join(
         [

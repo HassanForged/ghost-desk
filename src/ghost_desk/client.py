@@ -90,6 +90,10 @@ class OpenAIChatClient:
         }
         if tools:
             kwargs["tools"] = tools
+        if stream:
+            # Without this the API omits usage from stream chunks and the
+            # token budget in the agent loop never trips.
+            kwargs["stream_options"] = {"include_usage": True}
         last: BaseException | None = None
         for attempt in range(1, self.attempts + 1):
             try:

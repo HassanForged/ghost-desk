@@ -157,23 +157,29 @@ def _read_key() -> str:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def _read_line() -> str:
+def _read_line(echo: bool = False) -> str:
     chars: list[str] = []
     while True:
         key = _read_key()
         if key in {"\x03"}:
             raise KeyboardInterrupt
         if key in {"\r", "\n"}:
+            if echo:
+                _write("\n")
             return "".join(chars)
         if key in {"\x08", "\x7f"}:
             if chars:
                 chars.pop()
+                if echo:
+                    _write("\b \b")
             continue
         if key in {"\x00", "\xe0"}:
             _read_key()
             continue
         if key.isprintable():
             chars.append(key)
+            if echo:
+                _write(key)
 
 
 def _type_title(left: list[str], level: int, title: str) -> list[str]:
@@ -301,7 +307,7 @@ class BootScreen:
         if not sys.stdin.isatty():
             value = sys.stdin.readline().rstrip("\n")
         else:
-            value = _read_line()
+            value = _read_line(echo=not secret)
         shown = "stored" if secret and value else value
         self.left[-1] = prompt.rstrip() + shown
         _paint(self.left, 4, False)
