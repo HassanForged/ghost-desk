@@ -13,7 +13,9 @@ SESSION_HEIGHT = 38
 _BLACK = 16
 _DOT = 64
 # White-on-gray art needs a higher cut so the background drops to black.
-_DOT_BY_ASSET = {"ghost.png": 110}
+_DOT_BY_ASSET: dict[str, int] = {}
+# Cartoon art renders smooth: no dot threshold, background keyed out.
+_SMOOTH_ASSETS = {"ghost.png"}
 _BLOCK_CACHE: dict[tuple, list] = {}
 _ANSI_CACHE: dict[tuple, list[str]] = {}
 
@@ -38,11 +40,18 @@ def _dark(value) -> bool:
 def _load(path: Path, width: int, height: int):
     from PIL import Image
 
+    name = Path(path).name
     image = Image.open(path).convert("RGB")
     image = _crop_subject(image).convert("L")
+    target_w, target_h = width, height * 2
+    if name in _SMOOTH_ASSETS:
+        # Cartoon art: lift the flat gray background to black, keep the
+        # smooth shading and clean outlines. No dot threshold.
+        image = image.point(lambda v: 0 if v <= 85 else min(255, int((v - 85) * 1.15)))
+        return image.resize((target_w, target_h), Image.Resampling.LANCZOS)
     # Dots to pure white first: each output cell then measures dot density,
     # which survives the downscale instead of blurring into mush.
-    dot = _DOT_BY_ASSET.get(Path(path).name, _DOT)
+    dot = _DOT_BY_ASSET.get(name, _DOT)
     image = image.point(lambda v: 255 if v > dot else 0)
     target_w, target_h = width, height * 2
     # Center-crop to an integer multiple of the target so the averaging
