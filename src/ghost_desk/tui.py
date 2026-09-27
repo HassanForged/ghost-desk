@@ -471,19 +471,27 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     picture_protocol = detect_protocol()
 
+    from ghost_desk.leaves import LeafField, leaves_enabled
+
+    leaf_field = LeafField() if leaves_enabled() else None
+
     def ghost_fragments():
         caption = state["activity"] if state["busy"] else "idle"
         pad = max(0, (chrome["ghost_width"] - len(caption)) // 2)
+        width, height = chrome["ghost_width"], chrome["ghost_height"]
         if picture_protocol:
             # The real picture paints over this blank space after each flush.
-            fragments = [("", " " * (chrome["ghost_width"] + 1) + "\n")] * chrome["ghost_height"]
-            fragments.append(("class:caption", " " * pad + caption))
-            return fragments
-        # The ghost is still when idle and breathes while working.
-        bob = state["tick"] % 2 if state["busy"] else 0
-        rows = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=bob)
+            portrait = [[("", " ")] * (width + 1) for _ in range(height)]
+        else:
+            # The ghost is still when idle and breathes while working.
+            bob = state["tick"] % 2 if state["busy"] else 0
+            portrait = [list(row) for row in render_blocks(width=width, height=height, bob=bob)]
+        if leaf_field is not None:
+            for lx, ly, color, char in leaf_field.cells():
+                if 0 <= ly < height and 0 <= lx < width:
+                    portrait[ly][lx] = (f"fg:{color}", char)
         fragments: list[tuple[str, str]] = []
-        for row in rows:
+        for row in portrait:
             fragments.extend(row)
             fragments.append(("", "\n"))
         fragments.append(("class:caption", " " * pad + caption))
@@ -604,9 +612,16 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     async def animate() -> None:
         while True:
-            await asyncio.sleep(0.45)
+            await asyncio.sleep(0.5)
+            ticked = False
             if state["busy"]:
                 state["tick"] += 1
+                ticked = True
+            if leaf_field is not None and leaf_field.tick(
+                time.monotonic(), chrome["ghost_width"], chrome["ghost_height"]
+            ):
+                ticked = True
+            if ticked:
                 app.invalidate()
 
     ghost = Window(

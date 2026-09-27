@@ -16,6 +16,13 @@ _DOT = 64
 _DOT_BY_ASSET: dict[str, int] = {}
 # Pixel art: hard-quantized to the cartoon's own tones, nearest-neighbor.
 _PIXEL_ART_ASSETS = {"ghost.png"}
+# The cartoon's palette: black lines, lilac-tinted shading, white body.
+_PIXEL_PALETTE = {
+    0: (0, 0, 0),
+    80: (110, 90, 110),  # deep plum
+    160: (201, 168, 204),  # pale lilac
+    255: (255, 255, 255),
+}
 
 
 def _pixel_tone(v: int) -> int:
@@ -57,9 +64,15 @@ def _load(path: Path, width: int, height: int):
     target_w, target_h = width, height * 2
     if name in _PIXEL_ART_ASSETS:
         # Pixel art: quantize to the cartoon's tones, then nearest-neighbor
-        # so every pixel lands hard. No blur, no speckle.
-        image = image.point(_pixel_tone)
-        return image.resize((target_w, target_h), Image.Resampling.NEAREST)
+        # so every pixel lands hard. No blur, no speckle. Shading carries
+        # a whisper of lilac.
+        tones = image.point(_pixel_tone).resize((target_w, target_h), Image.Resampling.NEAREST)
+        rgb = Image.new("RGB", tones.size)
+        src, dst = tones.load(), rgb.load()
+        for y in range(tones.size[1]):
+            for x in range(tones.size[0]):
+                dst[x, y] = _PIXEL_PALETTE[src[x, y]]
+        return rgb
     # Dots to pure white first: each output cell then measures dot density,
     # which survives the downscale instead of blurring into mush.
     dot = _DOT_BY_ASSET.get(name, _DOT)
@@ -103,12 +116,16 @@ def _crop_subject(image, pad: int = 12):
     return image.crop((left, top, right, bottom))
 
 
+def _hex(value) -> str:
+    if isinstance(value, tuple):
+        return "%02x%02x%02x" % value
+    return f"{value:02x}{value:02x}{value:02x}"
+
+
 def _cell(top, bottom) -> tuple[str, str]:
     if _dark(top) and _dark(bottom):
         return ("", " ")
-    upper = f"{top:02x}{top:02x}{top:02x}"
-    lower = f"{bottom:02x}{bottom:02x}{bottom:02x}"
-    return (f"fg:#{upper} bg:#{lower}", "▄")
+    return (f"fg:#{_hex(top)} bg:#{_hex(bottom)}", "▄")
 
 
 def render_blocks(path: Path | None = None, *, width: int = 22, height: int = 26, bob: int = 0):
@@ -158,10 +175,9 @@ def render_ansi(path: Path | None = None, *, width: int = BOOT_WIDTH, height: in
             if _dark(top) and _dark(bottom):
                 parts.append(" ")
                 continue
-            parts.append(
-                f"\033[38;2;{top};{top};{top}m"
-                f"\033[48;2;{bottom};{bottom};{bottom}m▄"
-            )
+            r1, g1, b1 = top if isinstance(top, tuple) else (top, top, top)
+            r2, g2, b2 = bottom if isinstance(bottom, tuple) else (bottom, bottom, bottom)
+            parts.append(f"\033[38;2;{r1};{g1};{b1}m\033[48;2;{r2};{g2};{b2}m▄")
         rows.append("".join(parts) + reset)
     _ANSI_CACHE[key] = rows
     return rows

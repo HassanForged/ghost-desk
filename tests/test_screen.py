@@ -58,6 +58,7 @@ def test_portrait_is_pixel_art_with_hard_tones():
     for row in rows:
         for style, _ch in row:
             colors.update(re.findall(r"#([0-9a-f]{6})", style))
-    # The cartoon's own palette: black lines, two shading grays, white body.
-    assert colors <= {"000000", "505050", "a0a0a0", "ffffff"}, colors
+    # The cartoon's own palette: black lines, lilac shading, white body.
+    assert colors <= {"000000", "6e5a6e", "c9a8cc", "ffffff"}, colors
     assert "ffffff" in colors  # the body is actually there
+    assert "c9a8cc" in colors  # the lilac shading is actually there

@@ -126,6 +126,9 @@ Terminals that can show real images (Kitty, Ghostty, WezTerm, iTerm2, VS Code)
 can opt into the literal picture instead with `GHOST_DESK_IMG=kitty` or
 `GHOST_DESK_IMG=iterm2`.
 
+A few autumn leaves drift through the pane, one every few seconds — slow,
+sparse, and quiet. `GHOST_DESK_LEAVES=off` turns them off.
+
 ## Develop
 
 ```bash
