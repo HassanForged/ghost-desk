@@ -170,4 +170,4 @@ def test_boot_falls_back_without_protocol(monkeypatch):
     boot._paint(["ghost desk"], 0, False)
     blob = "".join(written)
     assert "\x1b_G" not in blob  # no kitty sequences
-    assert "▄" in blob  # half-block art still painted
+    assert "▀" in blob  # half-block art still painted

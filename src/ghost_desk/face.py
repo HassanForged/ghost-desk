@@ -128,7 +128,7 @@ def _hex(value) -> str:
 def _cell(top, bottom) -> tuple[str, str]:
     if _dark(top) and _dark(bottom):
         return ("", " ")
-    return (f"fg:#{_hex(top)} bg:#{_hex(bottom)}", "▄")
+    return (f"fg:#{_hex(top)} bg:#{_hex(bottom)}", "▀")
 
 
 def render_blocks(path: Path | None = None, *, width: int = 22, height: int = 26, bob: int = 0):
@@ -180,7 +180,7 @@ def render_ansi(path: Path | None = None, *, width: int = BOOT_WIDTH, height: in
                 continue
             r1, g1, b1 = top if isinstance(top, tuple) else (top, top, top)
             r2, g2, b2 = bottom if isinstance(bottom, tuple) else (bottom, bottom, bottom)
-            parts.append(f"\033[38;2;{r1};{g1};{b1}m\033[48;2;{r2};{g2};{b2}m▄")
+            parts.append(f"\033[38;2;{r1};{g1};{b1}m\033[48;2;{r2};{g2};{b2}m▀")
         rows.append("".join(parts) + reset)
     _ANSI_CACHE[key] = rows
     return rows
@@ -717,7 +717,7 @@ def fragments_from_grid(grid: list[list[int]]) -> list[list[tuple[str, str]]]:
             elif t == b:
                 line.append((f"fg:{TONE_COLORS[t]}", "\u2588"))
             else:
-                line.append((f"fg:{TONE_COLORS[t]} bg:{TONE_COLORS[b]}", "\u2584"))
+                line.append((f"fg:{TONE_COLORS[t]} bg:{TONE_COLORS[b]}", "\u2580"))
         rows.append(line)
     return rows
 
@@ -957,7 +957,7 @@ def leaf_fragments(pattern: list[list[int]], color: str) -> list[list[tuple[str,
             elif b == T_NONE:
                 line.append((f"fg:{color}", "\u2580"))
             else:
-                line.append((f"fg:{color}", "\u2584"))
+                line.append((f"fg:{color}", "\u2588"))
         rows.append(line)
     return rows
 
@@ -1105,44 +1105,53 @@ BUDDY_W = 16
 BUDDY_H = 12
 BUDDY_ROWS = 6  # half-block fragment rows
 
-# Buddy face anchors: fractions of the buddy body bbox, tuned to read at
-# 16 wide. Worried oval eyes, right higher for the up-right gaze; the open
-# screaming mouth sits well below them with clear air between — at icon
-# scale the portrait's tighter packing merges into one blob.
-_BUDDY_EYE_L = (0.423, 0.5)
-_BUDDY_EYE_R = (0.654, 0.417)
-_BUDDY_MOUTH = (0.577, 0.75)
-_BUDDY_EYE_SIZE = (0.154, 0.25)  # width, height fractions of the body bbox
-_BUDDY_MOUTH_SIZE = (0.308, 0.25)
+# Buddy face anchors: fractions of the buddy body bbox, matching the
+# hand-authored sprite below. Worried 3x3 eyes, right higher for the
+# up-right gaze; the open screaming mouth sits well below them.
+# (bbox of the art: x 1-14, y 0-11 -> 14x12; left eye center (5,5),
+# right eye center (10,4), mouth interior center (7.5,8.5).)
+_BUDDY_EYE_L = (4 / 14, 5 / 12)
+_BUDDY_EYE_R = (9 / 14, 4 / 12)
+_BUDDY_MOUTH = (6.5 / 14, 8.5 / 12)
+_BUDDY_EYE_SIZE = (3 / 14, 3 / 12)
+_BUDDY_MOUTH_SIZE = (5 / 14, 4 / 12)
+
+# Hand-authored buddy sprite, 16x12. X = black outline, # = white body,
+# G = gray screaming-mouth interior. Derived-from-reference bodies turn to
+# lumpy noise at this size, and the stamped face merged into the outline;
+# chunky hand pixels read as the spooked ghost instead. Flat white (no
+# dither) so it stays clean at icon scale.
+_BUDDY_ART = [
+    "      XXXX      ",
+    "    XX####XX    ",
+    "   X########X   ",
+    "  X######XXX#X  ",
+    " X##XXX##XXX##X ",
+    " X##XXX##XXX##X ",
+    " X##XXX#######X ",
+    " X####XXXX####X ",
+    " X####XGGX####X ",
+    " X####XGGX####X ",
+    "  X###XXXX###X  ",
+    "   XX######XX   ",
+]
 
 _BUDDY_CACHE: list[list[int]] | None = None
 
 
 def buddy_grid() -> list[list[int]]:
-    """The buddy as a tone grid: reference body, stamped face. Cached.
+    """The buddy as a tone grid: hand-authored 16x12 sprite.
 
-    The body derives from the reference at 20 wide, center-crops to the
-    exact 16x12 box and re-outlines for a clean bottom edge. Interior is
-    guaranteed white; the face is 100% stamped vector art at buddy
-    scale — no downscaled residuals ever survive.
+    Rounded white body, black outline, two worried black eyes (right
+    higher, the up-right gaze) and the open screaming mouth with its gray
+    interior. Cached; frames are derived from this by buddy_frame().
     """
     global _BUDDY_CACHE
     if _BUDDY_CACHE is None:
-        # Derive the body at 20 wide, then center-crop to the 16x12 dock.
-        # At 16 wide the head interior is only 6 cells across, which cannot
-        # fit two separated 2-wide eyes with white margins on both sides.
-        full = _derive_big(20, stamp=False)
-        ox = (20 - BUDDY_W) // 2
-        body = _outline_grid([row[ox : ox + BUDDY_W] for row in full[:BUDDY_H]])
-        _BUDDY_CACHE = _stamp_features(
-            body,
-            eye_l=_BUDDY_EYE_L,
-            eye_r=_BUDDY_EYE_R,
-            mouth=_BUDDY_MOUTH,
-            eye_size=_BUDDY_EYE_SIZE,
-            mouth_size=_BUDDY_MOUTH_SIZE,
-            mouth_min=(4.0, 3.0),
-        )
+        tones = {"X": T_BLACK, "#": T_WHITE, "G": T_GRAY}
+        _BUDDY_CACHE = [
+            [tones.get(ch, T_NONE) for ch in row] for row in _BUDDY_ART
+        ]
     return [row[:] for row in _BUDDY_CACHE]
 
 

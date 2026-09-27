@@ -1090,25 +1090,16 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 _row([("class:pill", "│ "), (style, f"{cand}".ljust(w - 4)), ("class:pill", " │")])
             footer = "↑↓ pick · tab fill · enter run · esc back"
         else:
-            # Header: selected command with description.
-            if pal["matches"]:
-                m = pal["matches"][pal["selected"]]
-                cmd = m.command
-                header = [
-                    ("class:ask", f"/{cmd.name} "),
-                ]
-                if cmd.args_hint:
-                    header.append(("class:muted", f"{cmd.args_hint} "))
-                header.append(("class:muted", f"— {cmd.description}"))
-                _row([("class:pill", "│ ")] + header + [("class:pill", " │")])
-            # Command rows.
+            # Command rows. The selected row carries the args hint.
             for i, m in enumerate(pal["matches"][:8]):
                 cmd = m.command
                 sel = i == pal["selected"]
                 style = "class:bubble" if sel else ""
                 name = f"/{cmd.name}"
-                row_cells = [("class:pill", "│ "), ("class:ask" if not sel else style, name.ljust(12))]
-                row_cells.append((style, f" {cmd.description}".ljust(w - 16)))
+                if cmd.args_hint:
+                    name += f" {cmd.args_hint}"
+                row_cells = [("class:pill", "│ "), ("class:ask" if not sel else style, name.ljust(22))]
+                row_cells.append((style, f" {cmd.description}".ljust(w - 26)))
                 row_cells.append(("class:pill", " │"))
                 _row(row_cells)
             footer = "↑↓ pick · tab fill · enter run · esc dismiss"
@@ -1125,7 +1116,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             return 0
         if pal["arg_mode"]:
             return min(len(pal["arg_candidates"]), 8) + 4
-        return min(len(pal["matches"]), 8) + 4
+        return min(len(pal["matches"]), 8) + 3
 
     def ask_allow(question: str) -> bool:
         event = threading.Event()
@@ -1337,6 +1328,9 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             return
         if _pal_visible():
             # Dismiss: clear the slash input.
+            event.current_buffer.reset()
+        elif event.current_buffer.text.startswith("/"):
+            # A bare "/" never opens the palette; clear it anyway.
             event.current_buffer.reset()
 
     @bindings.add("escape", "enter")

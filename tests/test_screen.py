@@ -120,7 +120,7 @@ def test_buddy_eye_frames_only_touch_eyes():
         frame = buddy_frame(name)
         diff = [(x, y) for y in range(BUDDY_H) for x in range(BUDDY_W) if frame[y][x] != base[y][x]]
         assert diff, name
-        boxes = [(5, 4, 8, 8), (8, 3, 11, 7)]  # eye boxes, ±1 for look shifts
+        boxes = [(3, 3, 7, 7), (8, 2, 12, 6)]  # eye boxes, ±1 for look shifts
         assert all(
             any(x0 <= x <= x1 and y0 <= y <= y1 for x0, y0, x1, y1 in boxes) for x, y in diff
         ), name

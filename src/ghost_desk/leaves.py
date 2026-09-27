@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from ghost_desk.face import leaf_fragments, leaf_sprites
 
 # Muted fall tones. Tasteful, not neon.
-LEAF_COLORS = ("#c98f4e", "#a9663f", "#d4a94e", "#a85f5f")
+LEAF_COLORS = ("#6f4f2b", "#5d3823", "#755d2b", "#5d3434")
 
 SPAWN_EVERY = 5.0  # seconds between leaves, ±30%
 MAX_LEAVES = 5
