@@ -116,14 +116,15 @@ build a one-page site for you@example.com
 Ghost Desk must show a plan and write nothing until you approve. That's the
 whole product in one sentence.
 
-## The ghost picture
+## The ghost
 
-The mascot is a real picture, not ASCII art. On terminals that can show
-images — Kitty, Ghostty, WezTerm, iTerm2, VS Code's terminal — Ghost Desk
-displays the actual PNG in the side pane (and on the boot screen). Everywhere
-else it falls back to a half-block portrait automatically.
+The mascot is pixel art drawn from the ghost PNG: hard-quantized to the
+cartoon's own tones (black lines, two shading grays, white body), so every
+pixel lands crisp. No blur, no speckle.
 
-Override with `GHOST_DESK_IMG`: `auto` (default), `kitty`, `iterm2`, or `off`.
+Terminals that can show real images (Kitty, Ghostty, WezTerm, iTerm2, VS Code)
+can opt into the literal picture instead with `GHOST_DESK_IMG=kitty` or
+`GHOST_DESK_IMG=iterm2`.
 
 ## Develop
 

@@ -1,10 +1,8 @@
-"""The literal ghost picture, shown as a real image when the terminal can.
+"""The literal ghost picture, for terminals that can show real images.
 
-Kitty graphics protocol first, iTerm2 inline images second. Anything else
-falls back to the half-block portrait. Detection is environment-based with
-a manual override; a wrong guess never breaks the session.
-
-Override with GHOST_DESK_IMG: auto (default), kitty, iterm2, or off.
+Kitty graphics protocol or iTerm2 inline images. Opt-in only via
+GHOST_DESK_IMG=kitty|iterm2; the default everywhere is the pixel-art
+portrait. A wrong guess never breaks the session.
 """
 
 from __future__ import annotations
@@ -20,21 +18,14 @@ _IMAGE_ID = 31
 
 
 def detect_protocol() -> str | None:
-    """Return 'kitty', 'iterm2', or None."""
-    override = os.environ.get("GHOST_DESK_IMG", "auto").strip().lower()
+    """Return 'kitty', 'iterm2', or None.
+
+    The real picture is opt-in only: GHOST_DESK_IMG=kitty|iterm2.
+    Everything else (including unset) gets the pixel-art portrait.
+    """
+    override = os.environ.get("GHOST_DESK_IMG", "").strip().lower()
     if override in ("kitty", "iterm2"):
         return override
-    if override in ("off", "none", "no", "0"):
-        return None
-    if os.environ.get("KITTY_WINDOW_ID"):
-        return "kitty"
-    term_program = os.environ.get("TERM_PROGRAM", "")
-    if term_program in ("ghostty", "WezTerm"):
-        return "kitty"
-    if term_program in ("iTerm.app", "vscode"):
-        return "iterm2"
-    if "kitty" in os.environ.get("TERM", ""):
-        return "kitty"
     return None
 
 

@@ -18,34 +18,24 @@ def test_detect_nothing_by_default():
     assert images.detect_protocol() is None
 
 
-def test_detect_kitty_window_id(monkeypatch):
+def test_detect_ignores_terminal_env(monkeypatch):
+    # The real picture is opt-in only; terminal sniffing no longer enables it.
     monkeypatch.setenv("KITTY_WINDOW_ID", "1")
-    assert images.detect_protocol() == "kitty"
-
-
-def test_detect_term_program(monkeypatch):
+    assert images.detect_protocol() is None
     monkeypatch.setenv("TERM_PROGRAM", "ghostty")
-    assert images.detect_protocol() == "kitty"
-    monkeypatch.setenv("TERM_PROGRAM", "WezTerm")
-    assert images.detect_protocol() == "kitty"
+    assert images.detect_protocol() is None
     monkeypatch.setenv("TERM_PROGRAM", "iTerm.app")
-    assert images.detect_protocol() == "iterm2"
-    monkeypatch.setenv("TERM_PROGRAM", "vscode")
-    assert images.detect_protocol() == "iterm2"
-
-
-def test_detect_term_kitty(monkeypatch):
+    assert images.detect_protocol() is None
     monkeypatch.setenv("TERM", "xterm-kitty")
-    assert images.detect_protocol() == "kitty"
+    assert images.detect_protocol() is None
 
 
-def test_detect_override(monkeypatch):
+def test_detect_explicit_opt_in(monkeypatch):
     monkeypatch.setenv("GHOST_DESK_IMG", "kitty")
     assert images.detect_protocol() == "kitty"
     monkeypatch.setenv("GHOST_DESK_IMG", "iterm2")
     assert images.detect_protocol() == "iterm2"
     monkeypatch.setenv("GHOST_DESK_IMG", "off")
-    monkeypatch.setenv("KITTY_WINDOW_ID", "1")
     assert images.detect_protocol() is None
 
 

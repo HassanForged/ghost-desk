@@ -48,3 +48,16 @@ def test_session_keeps_the_ghost_on_the_right():
     assert chrome["header"] is True
     still = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=0)
     assert still
+
+
+def test_portrait_is_pixel_art_with_hard_tones():
+    import re
+
+    rows = render_blocks(width=30, height=38, bob=0)
+    colors = set()
+    for row in rows:
+        for style, _ch in row:
+            colors.update(re.findall(r"#([0-9a-f]{6})", style))
+    # The cartoon's own palette: black lines, two shading grays, white body.
+    assert colors <= {"000000", "505050", "a0a0a0", "ffffff"}, colors
+    assert "ffffff" in colors  # the body is actually there
