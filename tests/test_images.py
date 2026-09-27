@@ -98,7 +98,7 @@ def test_install_picture_paints_once_then_skips():
     cleanup = images.install_picture(out, "kitty", {"ghost_width": 30, "ghost_height": 38}, lambda: (False, 0))
     out.flush()
     first_writes = list(out.writes)
-    assert any("\x1b[1;70H" in w for w in first_writes)  # 1-based col = 100 - 30
+    assert any("\x1b[2;36H" in w for w in first_writes)  # centered: row 2, col (100-30)//2+1
     assert any("c=30" in w and "r=38" in w for w in first_writes)
     out.writes.clear()
     out.flush()
@@ -120,7 +120,7 @@ def test_install_picture_repaints_on_bob_and_cleans_up():
     out.flush()
     joined = "".join(out.writes)
     assert "\x1b_Ga=d,d=i" in joined  # old frame deleted before repaint
-    assert "\x1b[2;70H" in joined  # bobbed down one row
+    assert "\x1b[3;36H" in joined  # bobbed down one row
     out.writes.clear()
     cleanup()
     assert out.flush == real_flush  # original flush restored

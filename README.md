@@ -126,7 +126,13 @@ Terminals that can show real images (Kitty, Ghostty, WezTerm, iTerm2, VS Code)
 can opt into the literal picture instead with `GHOST_DESK_IMG=kitty` or
 `GHOST_DESK_IMG=iterm2`.
 
-A few autumn leaves drift through the pane, one every few seconds — slow,
+The session is one calm, centered column: a small ghost portrait up top with
+autumn leaves drifting past, your messages in right-aligned bubbles, the
+ghost's replies as plain text, and a rounded input pill at the bottom. Press
+1, 2, or 3 on the empty screen to try a suggestion, or `/new` for a fresh
+thread.
+
+A few autumn leaves drift past the ghost, one every few seconds — slow,
 sparse, and quiet, never more than five at once. `GHOST_DESK_LEAVES=off`
 turns them off.
 

@@ -40,14 +40,40 @@ def test_boot_menu_matches_the_reference_screen():
     ]
 
 
-def test_session_keeps_the_ghost_on_the_right():
+def test_session_is_a_centered_single_column():
     from ghost_desk.tui import session_chrome
 
     chrome = session_chrome()
-    assert chrome["ghost_side"] == "right"
     assert chrome["header"] is True
+    assert chrome["col_width"] == 76
+    assert "ghost_side" not in chrome  # no more side pane
     still = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=0)
     assert still
+
+
+def test_user_messages_render_as_right_aligned_bubbles():
+    from ghost_desk.tui import COL_W, _bubble
+
+    fragments = _bubble("hello ghost")
+    text = "".join(part for _, part in fragments)
+    assert "╭" in text and "╮" in text and "╰" in text and "╯" in text
+    for line in text.split("\n"):
+        if "╭" in line:
+            assert len(line) == COL_W  # right-aligned to the column
+            assert line.endswith("╮")
+
+
+def test_greeting_matches_time_of_day():
+    from ghost_desk.tui import _greeting
+
+    assert _greeting() in {"Good morning.", "Good afternoon.", "Good evening."}
+
+
+def test_chips_are_suggestions():
+    from ghost_desk.tui import CHIPS
+
+    assert len(CHIPS) == 3
+    assert all(chip and len(chip) < 30 for chip in CHIPS)
 
 
 def test_portrait_is_pixel_art_with_hard_tones():

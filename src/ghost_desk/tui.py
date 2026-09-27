@@ -25,14 +25,47 @@ from ghost_desk.subagents import spawn
 from ghost_desk.tools import schemas
 
 def session_chrome() -> dict:
-    from ghost_desk.face import SESSION_HEIGHT, SESSION_WIDTH
-
+    # Pi-like: one centered column, small ghost up top, no side pane.
     return {
-        "ghost_side": "right",
+        "col_width": 76,
+        "ghost_width": 22,
+        "ghost_height": 11,
         "header": True,
-        "ghost_width": SESSION_WIDTH,
-        "ghost_height": SESSION_HEIGHT,
     }
+
+
+COL_W = 76
+CHIPS = ["plan my day", "explain something", "draft a message"]
+
+
+def _greeting() -> str:
+    import datetime
+
+    hour = datetime.datetime.now().hour
+    if hour < 12:
+        return "Good morning."
+    if hour < 17:
+        return "Good afternoon."
+    return "Good evening."
+
+
+def _bubble(text: str, width: int = COL_W) -> list[tuple[str, str]]:
+    """A right-aligned rounded bubble, Pi-style, for the user's messages."""
+    import textwrap
+
+    inner = textwrap.wrap(text, min(48, width - 8)) or [""]
+    content_w = max(len(line) for line in inner)
+    bar = "─" * (content_w + 2)
+    box = ["╭" + bar + "╮"]
+    box += ["│ " + line.ljust(content_w) + " │" for line in inner]
+    box.append("╰" + bar + "╯")
+    box_w = content_w + 4
+    fragments: list[tuple[str, str]] = []
+    for line in box:
+        fragments.append(("", " " * (width - box_w)))
+        fragments.append(("class:bubble", line + "\n"))
+    fragments.append(("", "\n"))
+    return fragments
 
 
 def _dwidth(text: str) -> int:
@@ -430,23 +463,13 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     def chat_fragments():
         fragments: list[tuple[str, str]] = []
         if not lines and not state["stream"] and not state["busy"]:
-            fragments.append(("class:muted", "\n"))
-            fragments.extend(
-                _speech(
-                    [
-                        ("class:brand", "ghost desk"),
-                        ("class:reply", ""),
-                        ("class:reply", "Your brain, your machine, your notes."),
-                        ("class:reply", ""),
-                        ("class:muted", "Reads stay local. Writes wait for a yes."),
-                        ("class:muted", "Type /help for commands, or just talk."),
-                    ]
-                )
-            )
+            fragments.append(("", "\n\n"))
+            fragments.append(("class:greet", _greeting().center(COL_W) + "\n"))
+            fragments.append(("class:muted", "What do you want to do?".center(COL_W) + "\n"))
             return fragments
         for role, text in lines:
             if role == "you":
-                fragments.append(("class:user", "❯  " + text + "\n"))
+                fragments.extend(_bubble(text))
             elif role == "ghost":
                 fragments.append(("class:reply", text + "\n\n"))
             elif role == "tool":
@@ -476,12 +499,11 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     leaf_field = LeafField() if leaves_enabled() else None
 
     def ghost_fragments():
-        caption = state["activity"] if state["busy"] else "idle"
-        pad = max(0, (chrome["ghost_width"] - len(caption)) // 2)
         width, height = chrome["ghost_width"], chrome["ghost_height"]
+        pad = " " * ((COL_W - width) // 2)
         if picture_protocol:
             # The real picture paints over this blank space after each flush.
-            portrait = [[("", " ")] * (width + 1) for _ in range(height)]
+            portrait = [[("", " ")] * width for _ in range(height)]
         else:
             # The ghost is still when idle and breathes while working.
             bob = state["tick"] % 2 if state["busy"] else 0
@@ -492,10 +514,29 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                     portrait[ly][lx] = (f"fg:{color}", char)
         fragments: list[tuple[str, str]] = []
         for row in portrait:
+            fragments.append(("", pad))
             fragments.extend(row)
             fragments.append(("", "\n"))
-        fragments.append(("class:caption", " " * pad + caption))
         return fragments
+
+    def header_fragments():
+        if state["busy"]:
+            elapsed = max(0, int(time.monotonic() - state["started"]))
+            phase = {"searching": "searching", "reading": "reading", "working": "working"}.get(
+                state["activity"], "thinking"
+            )
+            right = f"{config.model or 'brain'}  ·  {phase} {elapsed}s"
+        else:
+            right = f"{config.model or 'brain'}  ·  idle"
+        left = " ghost desk"
+        gap = max(1, COL_W - len(left) - len(right) - 1)
+        return [("class:brand", left), ("class:muted", " " * gap + right + " ")]
+
+    def chips_fragments():
+        if lines or state["busy"] or state["stream"]:
+            return []
+        row = "   ".join(f"○ {i}  {chip}" for i, chip in enumerate(CHIPS, 1))
+        return [("class:chip", row.center(COL_W) + "\n")]
 
     buffer = Buffer(multiline=True)
 
@@ -610,6 +651,15 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     def _quit(event) -> None:
         app.exit(result=0)
 
+    for _key, _chip in zip("123", CHIPS):
+
+        @bindings.add(_key)
+        def _pick_chip(event, _chip=_chip, _key=_key) -> None:
+            if not lines and not event.current_buffer.text and not state["busy"]:
+                event.current_buffer.insert_text(_chip)
+            else:
+                event.current_buffer.insert_text(_key)
+
     async def animate() -> None:
         while True:
             await asyncio.sleep(0.5)
@@ -636,60 +686,69 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         right_margins=[ScrollbarMargin()],
         style="class:chat",
     )
-    n_tools = len(schemas(include_ghost=True))
-    skill_names = " · ".join(item.name for item in load_parents(skills_root)[:5]) or "desk"
-
-    def meter_fragments():
-        if state["busy"]:
-            elapsed = max(0, int(time.monotonic() - state["started"]))
-            phase = {"searching": "searching", "reading": "reading", "working": "working"}.get(
-                state["activity"], "thinking"
-            )
-            right = f"{phase} {elapsed}s"
-        else:
-            right = "idle"
-        return [
-            ("class:muted", f" {config.model or 'brain'}  ·  {right}"),
-        ]
-
     header = Window(
         height=1,
-        content=FormattedTextControl(
-            lambda: [
-                ("class:brand", " ghost desk "),
-                ("class:muted", f" ·  {n_tools} tools  ·  {skill_names}  ·  /help"),
-            ]
-        ),
+        content=FormattedTextControl(header_fragments),
         style="class:header",
+    )
+    ghost = Window(
+        height=chrome["ghost_height"],
+        content=FormattedTextControl(ghost_fragments),
+        style="class:side",
+    )
+    chat = Window(
+        content=FormattedTextControl(chat_fragments),
+        wrap_lines=True,
+        style="class:chat",
+    )
+    chips = Window(
+        height=1,
+        content=FormattedTextControl(chips_fragments),
+        style="class:chips",
     )
     typed = Window(
         content=BufferControl(buffer=buffer),
+        width=COL_W - 4,
         height=1,
         style="class:composer",
     )
-    composer = VSplit(
+    pill = HSplit(
         [
-            Window(width=3, content=FormattedTextControl(lambda: [("class:prompt", " ❯")])),
-            typed,
-        ],
-        height=1,
-        style="class:composer",
+            Window(
+                height=1,
+                content=FormattedTextControl(lambda: [("class:pill", "╭" + "─" * (COL_W - 2) + "╮")]),
+            ),
+            VSplit(
+                [
+                    Window(
+                        width=2,
+                        height=1,
+                        content=FormattedTextControl(lambda: [("class:pill", "│ ")]),
+                    ),
+                    typed,
+                    Window(
+                        width=2,
+                        height=1,
+                        content=FormattedTextControl(lambda: [("class:pill", " │")]),
+                    ),
+                ],
+                height=1,
+            ),
+            Window(
+                height=1,
+                content=FormattedTextControl(lambda: [("class:pill", "╰" + "─" * (COL_W - 2) + "╯")]),
+            ),
+        ]
     )
-    footer = Window(
+    hint = Window(
         height=1,
         content=FormattedTextControl(
-            lambda: [
-                ("class:muted", " Enter send  ·  Alt-Enter newline  ·  /help  ·  "),
-                ("class:muted", config.model or ""),
-            ]
+            lambda: [("class:muted", "Enter send  ·  Alt-Enter newline  ·  /help  ·  /new".center(COL_W))]
         ),
         style="class:footer",
     )
-    meter = Window(height=1, content=FormattedTextControl(meter_fragments), style="class:meter")
-    rule = Window(height=1, char="─", style="class:rule")
-    divider = Window(width=1, char="│", style="class:divider")
-    left = HSplit([header, chat, meter, rule, composer, footer])
-    layout = Layout(VSplit([left, divider, ghost]))
+    body = HSplit([header, ghost, chat, chips, pill, hint], width=COL_W)
+    layout = Layout(VSplit([Window(style="class:chat"), body, Window(style="class:chat")]))
     app = Application(
         layout=layout,
         key_bindings=bindings,
@@ -704,7 +763,11 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 "composer": "bg:#161616 #f0f0f0",
                 "prompt": "bg:#161616 #9a9a9a",
                 "brand": "bold #f0abfc",
-                "bubble": "#f0abfc",
+                "bubble": "bg:#1e1e1e #f4f4f4",
+                "greet": "#ededed",
+                "chip": "#8a8a8a",
+                "pill": "#3d3d3d",
+                "chips": "bg:#090909",
                 "caption": "#5a5a5a",
                 "divider": "#2e2e2e bg:#090909",
                 "user": "bold #f4f4f4",
