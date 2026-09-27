@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import os
+import re
 import signal
 import sys
 import time
 
 TEXT = "\033[38;2;214;214;214m"
 DIM = "\033[38;2;138;138;138m"
+FAINT = "\033[38;2;96;96;96m"
 RESET = "\033[0m"
 HIDE = "\033[?25l"
 SHOW = "\033[?25h"
 LEFT_COLS = 42
+TAGLINE = "Your brain, your machine, your notes."
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
 
 _GHOST_CACHE: list[str] | None = None
 
@@ -47,7 +51,7 @@ def _ghost_rows() -> list[str]:
 
 
 def _visible(text: str) -> int:
-    return len(text)
+    return len(_ANSI_RE.sub("", text))
 
 
 def _paint(left: list[str], level: int = 4, cursor: bool = False) -> None:
@@ -72,7 +76,7 @@ def _dots(left: list[str], level: int, stem: str) -> None:
 
 def _line(left: list[str], level: int, stem: str, done: str, pause: float = 0.05) -> list[str]:
     _dots(left, level, stem)
-    left = left + [stem + done]
+    left = left + [stem + FAINT + done + RESET]
     _paint(left, level, True)
     time.sleep(pause)
     return left
@@ -190,19 +194,23 @@ class BootScreen:
         if signed:
             self.left = [
                 "GHOST DESK",
-                "waking local harness ready",
-                "checking this pc ok",
-                "memory on disk",
-                "skills loaded",
-                "provider signed",
-                "sessions kept",
-                "handoffs kept",
+                FAINT + TAGLINE + RESET,
+                "waking local harness" + FAINT + " ready" + RESET,
+                "checking this pc" + FAINT + " ok" + RESET,
+                "memory" + FAINT + " on disk" + RESET,
+                "skills" + FAINT + " loaded" + RESET,
+                "provider" + FAINT + " signed" + RESET,
+                "sessions" + FAINT + " kept" + RESET,
+                "handoffs" + FAINT + " kept" + RESET,
             ]
             _paint(self.left, 4, False)
             time.sleep(0.12)
             return
         self.left = []
         self.left = _type_title(self.left, 0, "GHOST DESK")
+        self.left = self.left + [FAINT + TAGLINE + RESET]
+        _paint(self.left, 4, False)
+        time.sleep(0.15)
         steps = (
             ("waking local harness", " ready"),
             ("checking this pc", " ok"),

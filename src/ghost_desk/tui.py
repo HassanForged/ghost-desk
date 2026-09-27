@@ -412,9 +412,11 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         if not lines and not state["stream"] and not state["busy"]:
             fragments.extend(
                 [
-                    ("class:muted", "\n\n"),
-                    ("class:reply", "Welcome to Ghost Desk.\n"),
-                    ("class:muted", "Type a message or /help. Reads stay local. Writes wait for a yes.\n"),
+                    ("class:muted", "\n"),
+                    ("class:brand", "GHOST DESK\n"),
+                    ("class:reply", "Your brain, your machine, your notes.\n\n"),
+                    ("class:muted", "Reads stay local. Writes wait for a yes.\n"),
+                    ("class:muted", "Type /help for commands, or just talk.\n"),
                 ]
             )
             return fragments
@@ -442,11 +444,16 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     chrome = session_chrome()
 
     def ghost_fragments():
-        rows = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=0)
+        # The ghost is still when idle and breathes while working.
+        bob = state["tick"] % 2 if state["busy"] else 0
+        rows = render_blocks(width=chrome["ghost_width"], height=chrome["ghost_height"], bob=bob)
         fragments: list[tuple[str, str]] = []
         for row in rows:
             fragments.extend(row)
             fragments.append(("", "\n"))
+        caption = state["activity"] if state["busy"] else "idle"
+        pad = max(0, (chrome["ghost_width"] - len(caption)) // 2)
+        fragments.append(("class:caption", " " * pad + caption))
         return fragments
 
     buffer = Buffer(multiline=True)
@@ -477,7 +484,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         def work() -> None:
             def on_text(delta: str) -> None:
                 state["stream"] += delta
-                app.loop.call_soon_threadsafe(app.invalidate)
+                app.invalidate()
 
             def on_status(note: str) -> None:
                 state["activity"] = activity_for(note)
@@ -495,14 +502,14 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                             lines[-1] = ("tool", f"{name} ×2")
                     else:
                         lines.append(("tool", name))
-                app.loop.call_soon_threadsafe(app.invalidate)
+                app.invalidate()
 
             def ask_allow(question: str) -> bool:
                 event = threading.Event()
                 pending["event"] = event
                 pending["yes"] = False
                 lines.append(("ask", question + "  y/n"))
-                app.loop.call_soon_threadsafe(app.invalidate)
+                app.invalidate()
                 event.wait(timeout=180)
                 return bool(pending["yes"])
 
@@ -536,7 +543,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             state["activity"] = "idle"
             state["busy"] = False
             status.set("ready")
-            app.loop.call_soon_threadsafe(app.invalidate)
+            app.invalidate()
 
         asyncio.get_running_loop().run_in_executor(None, work)
 
@@ -564,7 +571,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     async def animate() -> None:
         while True:
-            await asyncio.sleep(0.25)
+            await asyncio.sleep(0.45)
             if state["busy"]:
                 state["tick"] += 1
                 app.invalidate()
@@ -632,8 +639,9 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     )
     meter = Window(height=1, content=FormattedTextControl(meter_fragments), style="class:meter")
     rule = Window(height=1, char="─", style="class:rule")
+    divider = Window(width=1, char="│", style="class:divider")
     left = HSplit([header, chat, meter, rule, composer, footer])
-    layout = Layout(VSplit([left, ghost]))
+    layout = Layout(VSplit([left, divider, ghost]))
     app = Application(
         layout=layout,
         key_bindings=bindings,
@@ -647,11 +655,13 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 "rule": "bg:#090909 #333333",
                 "composer": "bg:#161616 #f0f0f0",
                 "prompt": "bg:#161616 #9a9a9a",
-                "brand": "bold #ececec",
+                "brand": "bold #f0abfc",
+                "caption": "#5a5a5a",
+                "divider": "#2e2e2e bg:#090909",
                 "user": "bold #f4f4f4",
                 "reply": "#d4d4d4",
                 "tool": "#8a8a8a",
-                "ask": "#e6e6e6",
+                "ask": "#f0abfc",
                 "muted": "#7a7a7a",
                 "status": "#9a9a9a italic",
             }
@@ -660,8 +670,8 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         mouse_support=True,
     )
 
-    async def startup() -> None:
-        asyncio.create_task(animate())
+    def startup() -> None:
+        app.create_background_task(animate())
 
     app.pre_run_callables.append(startup)
     app.layout.focus(typed)

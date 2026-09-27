@@ -8,9 +8,10 @@ HOOD = Path(__file__).resolve().parent / "assets" / "hood.jpg"
 
 BOOT_WIDTH = 36
 BOOT_HEIGHT = 32
-SESSION_WIDTH = 24
-SESSION_HEIGHT = 28
+SESSION_WIDTH = 30
+SESSION_HEIGHT = 38
 _BLACK = 16
+_DOT = 64
 _BLOCK_CACHE: dict[tuple, list] = {}
 _ANSI_CACHE: dict[tuple, list[str]] = {}
 
@@ -26,16 +27,30 @@ def activity_for(note: str) -> str:
     return "working"
 
 
-def _dark(pixel: tuple[int, int, int]) -> bool:
-    return max(pixel) <= _BLACK
+def _dark(value) -> bool:
+    if isinstance(value, tuple):
+        return max(value) <= _BLACK
+    return value <= _BLACK
 
 
 def _load(path: Path, width: int, height: int):
     from PIL import Image
 
     image = Image.open(path).convert("RGB")
-    image = _crop_subject(image)
-    return image.resize((width, height * 2), Image.Resampling.LANCZOS)
+    image = _crop_subject(image).convert("L")
+    # Dots to pure white first: each output cell then measures dot density,
+    # which survives the downscale instead of blurring into mush.
+    image = image.point(lambda v: 255 if v > _DOT else 0)
+    target_w, target_h = width, height * 2
+    # Center-crop to an integer multiple of the target so the averaging
+    # lands evenly instead of banding across dot rows.
+    kx = max(1, image.size[0] // target_w)
+    ky = max(1, image.size[1] // target_h)
+    crop_w, crop_h = target_w * kx, target_h * ky
+    left = (image.size[0] - crop_w) // 2
+    top = (image.size[1] - crop_h) // 2
+    image = image.crop((left, top, left + crop_w, top + crop_h))
+    return image.resize((target_w, target_h), Image.Resampling.BOX)
 
 
 def _crop_subject(image, pad: int = 12):
@@ -65,16 +80,16 @@ def _crop_subject(image, pad: int = 12):
     return image.crop((left, top, right, bottom))
 
 
-def _cell(top: tuple[int, int, int], bottom: tuple[int, int, int]) -> tuple[str, str]:
+def _cell(top, bottom) -> tuple[str, str]:
     if _dark(top) and _dark(bottom):
         return ("", " ")
-    upper = f"{top[0]:02x}{top[1]:02x}{top[2]:02x}"
-    lower = f"{bottom[0]:02x}{bottom[1]:02x}{bottom[2]:02x}"
+    upper = f"{top:02x}{top:02x}{top:02x}"
+    lower = f"{bottom:02x}{bottom:02x}{bottom:02x}"
     return (f"fg:#{upper} bg:#{lower}", "▄")
 
 
 def render_blocks(path: Path | None = None, *, width: int = 22, height: int = 26, bob: int = 0):
-    """Truecolor half-blocks from the photo. Bob is a blank row shift, not a new drawing."""
+    """Grayscale density half-blocks from the photo. Bob is a blank row shift, not a new drawing."""
     source = path or HOOD
     key = (str(source), width, height, bob)
     cached = _BLOCK_CACHE.get(key)
@@ -121,8 +136,8 @@ def render_ansi(path: Path | None = None, *, width: int = BOOT_WIDTH, height: in
                 parts.append(" ")
                 continue
             parts.append(
-                f"\033[38;2;{top[0]};{top[1]};{top[2]}m"
-                f"\033[48;2;{bottom[0]};{bottom[1]};{bottom[2]}m▄"
+                f"\033[38;2;{top};{top};{top}m"
+                f"\033[48;2;{bottom};{bottom};{bottom}m▄"
             )
         rows.append("".join(parts) + reset)
     _ANSI_CACHE[key] = rows

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -613,7 +614,14 @@ def launch_open(app: str, url: str, runner=None) -> str:
         if page:
             command.append(page)
     else:
-        command = ["xdg-open", page or program]
+        if program:
+            command = [program]
+            if page:
+                command.append(page)
+        elif sys.platform == "darwin":
+            command = ["open", page]
+        else:
+            command = ["xdg-open", page or program]
     launch = runner or subprocess.Popen
     launch(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
     shown = " ".join(part for part in (program or "browser", page) if part)
