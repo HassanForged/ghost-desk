@@ -46,6 +46,35 @@ ACCESS_ON = (
 )
 
 
+def _stamp_overlay_cells(rows, overlays, width, blank, max_rows):
+    """Stamp (ox, oy, fragment_rows) overlays onto fragment rows.
+
+    Rows may hold multi-char text fragments; overlays index by character
+    column, so rows are first exploded to per-char cells — otherwise an
+    overlay landing past the fragment count writes out of range and crashes.
+    Every row is padded to `width`; overlay cells outside the bounds are
+    skipped. Returns the new rows.
+    """
+    char_rows: list[list[tuple[str, str]]] = []
+    for row in rows:
+        cells: list[tuple[str, str]] = []
+        for style, text in row:
+            cells.extend((style, ch) for ch in text)
+        char_rows.append(cells)
+    for row in char_rows:
+        row.extend([blank] * max(0, width - len(row)))
+    for ox, oy, frag_rows in overlays:
+        for dy, frow in enumerate(frag_rows):
+            y = oy + dy
+            if not 0 <= y < max_rows or y >= len(char_rows):
+                continue
+            for dxx, cell in enumerate(frow):
+                x = ox + dxx
+                if 0 <= x < width and x < len(char_rows[y]):
+                    char_rows[y][x] = cell
+    return char_rows
+
+
 def header_line(
     *,
     busy: bool,
@@ -951,10 +980,6 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 labels += f" · +{crew.overflow} more"
             rows[1].append(("class:muted", labels))
 
-        # Pad every row to the full width, then stamp overlays on top.
-        for row in rows:
-            vis = sum(len(ch) for _, ch in row)
-            row.extend([blank] * max(0, w - vis))
         overlays: list[tuple[int, int, list[list[tuple[str, str]]]]] = []
         if life.sleeping:
             overlays += sleep_z_fragments(life.tick_count, BUDDY_W, BUDDY_ROWS)
@@ -963,15 +988,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         leaf_field = ui_toggles["leaf_field"]
         if leaf_field is not None:
             overlays += [(lx, ly, frag) for lx, ly, frag in leaf_field.fragments()]
-        for ox, oy, frag_rows in overlays:
-            for dy, frow in enumerate(frag_rows):
-                y = oy + dy
-                if not 0 <= y < BUDDY_ROWS:
-                    continue
-                for dxx, cell in enumerate(frow):
-                    x = ox + dxx
-                    if 0 <= x < w:
-                        rows[y][x] = cell
+        rows = _stamp_overlay_cells(rows, overlays, w, blank, BUDDY_ROWS)
         fragments: list[tuple[str, str]] = []
         for row in rows:
             fragments.extend(row)

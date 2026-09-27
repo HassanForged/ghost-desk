@@ -170,3 +170,43 @@ def test_portrait_is_pixel_art_with_hard_tones():
     assert colors <= {"000000", "6e5a6e", "c9a8cc", "ffffff"}, colors
     assert "ffffff" in colors  # the body is actually there
     assert "c9a8cc" in colors  # the lilac shading is actually there
+
+
+def test_overlay_stamp_survives_leaf_over_multichar_text():
+    """Regression: a leaf drifting over header text used to crash.
+
+    Rows hold multi-char text fragments (e.g. the header line), but overlays
+    index by character column. Stamping a leaf past the fragment count wrote
+    out of range -> `list assignment index out of range`.
+    """
+    from ghost_desk.tui import _stamp_overlay_cells
+
+    blank = ("", " ")
+    # Row 0: 18 single-char buddy cells + multi-char header text fragments,
+    # exactly like header_fragments builds them.
+    rows = [
+        [("", " ") ] * 18 + [("class:brand", "ghost desk · haunting"), ("", "   "), ("class:muted", "grok-4.6")],
+        [("", " ")] * 18,
+    ]
+    leaf = [[("fg:#c9a8cc", "❧")]]
+    overlays = [(190, 0, leaf), (195, 1, leaf), (5, 0, leaf)]  # far right + buddy zone
+    stamped = _stamp_overlay_cells(rows, overlays, 200, blank, 6)
+    assert all(len(r) == 200 for r in stamped)
+    # The leaf actually landed where it should.
+    assert stamped[0][190] == ("fg:#c9a8cc", "❧")
+    assert stamped[1][195] == ("fg:#c9a8cc", "❧")
+    assert stamped[0][5] == ("fg:#c9a8cc", "❧")
+    # Header text survived the explode: characters in order.
+    text = "".join(ch for _, ch in stamped[0][18:39])
+    assert text == "ghost desk · haunting"
+
+
+def test_overlay_stamp_clips_out_of_bounds():
+    from ghost_desk.tui import _stamp_overlay_cells
+
+    blank = ("", " ")
+    rows = [[("", "a"), ("", "bc")]]  # multi-char fragment, visible width 3
+    frag = [[("", "X")]]
+    # Negative origin, past the right edge, past the bottom: all clipped.
+    stamped = _stamp_overlay_cells(rows, [(-5, 0, frag), (99, 0, frag), (0, 9, frag)], 10, blank, 6)
+    assert [ch for _, ch in stamped[0]] == list("abc") + [" "] * 7
