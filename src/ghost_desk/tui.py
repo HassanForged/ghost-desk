@@ -23,6 +23,8 @@ from ghost_desk.agent import PERSONALITIES
 from ghost_desk.skills import ensure_skills, load_child, load_parents, render_index
 from ghost_desk.subagents import spawn
 from ghost_desk.tools import schemas
+from ghost_desk import update as update_flow
+from ghost_desk.update import UpdateSequence
 
 def header_status(*, busy: bool, phase: str = "thinking", elapsed: int = 0, full_access: bool = False) -> str:
     """Right side of the session header. The ghost is the identity here; the brain stays under /model."""
@@ -109,6 +111,7 @@ HELP = """\
 /export      write Markdown folders
 /curate      merge duplicate skills and prune dead ones
 /bg          list jobs, /bg add <schedule> <prompt>, /bg digest
+/update      fetch and install the latest haunting
 /access      show or change access level (/access full, /access ask)
 /quit        leave
 Enter sends. Alt-Enter inserts a newline. Ctrl+C cancels the current turn.
@@ -223,6 +226,7 @@ def _slash(
     session: DeskSession,
     skills_root: Path,
     gate: PermissionGate | None = None,
+    update_ui: Callable[[], str] | None = None,
 ) -> str | None:
     """Return 'quit' to leave, or a string that was handled. None means it is not a slash command."""
     stripped = text.strip()
@@ -377,8 +381,81 @@ def _slash(
         return "ok"
     if command == "bg":
         return _bg(rest, console=console, memory=memory, config=config, session=session, skills_root=skills_root)
+    if command == "update":
+        if update_ui is not None:
+            # Full-screen TUI: the animated dissolve/stitch/re-materialize show.
+            return update_ui()
+        return _update_sync(console)
     console.print("Unknown command. /help lists them.")
     return "ok"
+
+
+def _update_sync(console) -> str:
+    """The /update run for the plain REPL: blocking, no pixel show."""
+    console.print(update_flow.HOLD_STILL)
+    console.print(update_flow.STITCHING)
+    seq = UpdateSequence()
+    seq.result = update_flow.install_update()
+    for _role, text in seq.final_lines():
+        console.print(text)
+    return "ok"
+
+
+def _dither_out(rows: list[list[tuple[str, str]]], frac: float, seed: int = 0x6A05):
+    """Blank a seeded-random fraction of the non-blank cells: a dither dissolve."""
+    import random
+
+    rng = random.Random(seed)
+    cells = [
+        (y, x)
+        for y, row in enumerate(rows)
+        for x, (_style, text) in enumerate(row)
+        if text.strip()
+    ]
+    rng.shuffle(cells)
+    hide = set(cells[: int(len(cells) * max(0.0, min(1.0, frac)))])
+    return [
+        [("", " ") if (y, x) in hide else cell for x, cell in enumerate(row)]
+        for y, row in enumerate(rows)
+    ]
+
+
+def _stitch_bar(frame: int, width: int) -> list[tuple[str, str]]:
+    """One shimmering indeterminate pixel bar row, `width` cells wide."""
+    span = max(4, width - 6)
+    pos = frame % (2 * span)
+    filled = 6 + (pos if pos <= span else 2 * span - pos)
+    filled = max(0, min(width, filled))
+    return [("class:upbar", "█" * filled), ("class:muted", "░" * (width - filled))]
+
+
+def _update_ghost_fragments(seq: UpdateSequence, width: int, height: int, pad: str):
+    """Ghost-pane frames for the /update show: dissolve, stitch, re-materialize."""
+    from ghost_desk.face import render_blocks
+
+    portrait = [list(row) for row in render_blocks(width=width, height=height)]
+    frac = seq.dissolve_frac
+    if frac >= 1.0:
+        portrait = [[("", " ")] * width for _ in range(height)]
+    elif frac > 0:
+        portrait = _dither_out(portrait, frac)
+    fragments: list[tuple[str, str]] = []
+    for row in portrait:
+        fragments.append(("", pad))
+        fragments.extend(row)
+        fragments.append(("", "\n"))
+    if seq.phase == "stitch":
+        # The bottom two rows become the label + the shimmering bar.
+        label = update_flow.STITCHING
+        label_pad = " " * max(0, (width - len(label)) // 2)
+        del fragments[-(2 * (width + 2)) :]
+        fragments.append(("", pad))
+        fragments.append(("class:muted", label_pad + label))
+        fragments.append(("", "\n"))
+        fragments.append(("", pad))
+        fragments.extend(_stitch_bar(seq.frame, width))
+        fragments.append(("", "\n"))
+    return fragments
 
 
 def _confirm_access(
@@ -568,7 +645,8 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         with lines_lock:
             return list(lines)
 
-    state = {"activity": "idle", "tick": 0, "stream": "", "busy": False, "started": 0.0, "cancel": False}
+    state = {"activity": "idle", "tick": 0, "stream": "", "busy": False, "started": 0.0, "cancel": False,
+             "update_seq": None, "update_nagged": False}
 
     def refresh() -> None:
         if app.is_running:
@@ -638,6 +716,10 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     def ghost_fragments():
         width, height = chrome["ghost_width"], chrome["ghost_height"]
         pad = " " * ((COL_W - width) // 2)
+        seq = state.get("update_seq")
+        if seq is not None:
+            # The /update show takes over the ghost pane: dissolve, stitch, re-materialize.
+            return _update_ghost_fragments(seq, width, height, pad)
         if picture_protocol:
             # The real picture paints over this blank space after each flush.
             portrait = [[("", " ")] * width for _ in range(height)]
@@ -706,7 +788,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         if not text.strip() or state["busy"]:
             return
         add_line("you", text.strip())
-        handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root, gate=gate)
+        handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root, gate=gate, update_ui=_begin_update)
         if handled == "quit":
             app.exit(result=0)
             return
@@ -765,6 +847,23 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
         asyncio.get_running_loop().run_in_executor(None, work)
 
+    def _begin_update() -> str:
+        """Start the /update show: `hold still…`, pip in a thread, frames on the tick."""
+        if state.get("update_seq") is not None or state["busy"]:
+            add_line("note", "already stitching — hold still a little longer.")
+            return "ok"
+        seq = UpdateSequence()
+        state["update_seq"] = seq
+        add_line("ghost", update_flow.HOLD_STILL)
+
+        def _worker() -> None:
+            seq.result = update_flow.install_update()
+            app.invalidate()
+
+        threading.Thread(target=_worker, daemon=True, name="ghost-update").start()
+        app.invalidate()
+        return "ok"
+
     bindings = KeyBindings()
 
     @bindings.add("enter")
@@ -801,6 +900,13 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
             ticked = False
             if state["busy"]:
                 state["tick"] += 1
+                ticked = True
+            seq = state.get("update_seq")
+            if seq is not None:
+                if seq.tick():
+                    for role, text in seq.final_lines():
+                        add_line(role, text)
+                    state["update_seq"] = None
                 ticked = True
             if leaf_field is not None and leaf_field.tick(
                 time.monotonic(), chrome["ghost_width"], chrome["ghost_height"]
@@ -898,6 +1004,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 "tool": "#8a8a8a",
                 "ask": "#f0abfc",
                 "muted": "#7a7a7a",
+                "upbar": "#d8a7e0 bg:#090909",
                 "status": "#9a9a9a italic",
             }
         ),
@@ -907,6 +1014,16 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     def startup() -> None:
         app.create_background_task(animate())
+
+        def _nag(_remote: str) -> None:
+            # One dim line per session, never a modal, never blocking.
+            if state.get("update_nagged"):
+                return
+            state["update_nagged"] = True
+            add_line("note", update_flow.TAP_LINE)
+            app.invalidate()
+
+        update_flow.start_update_check(_nag)
 
     app.pre_run_callables.append(startup)
     app.layout.focus(typed)
@@ -1017,6 +1134,12 @@ def run_tui(
 
     desk = BackgroundDesk(memory, unattended)
     desk.start()
+    # The tap on the shoulder: one background check per boot, silent on failure.
+    from ghost_desk import update as update_flow
+
+    update_flow.start_update_check(
+        lambda _remote: console.print(update_flow.TAP_LINE, style="dim")
+    )
     # One gate for the whole session: approved paths stay approved across turns.
     gate = PermissionGate(config.workspace(), ask=_asker(console, ask), full_access=access_level(config) == "full")
     try:

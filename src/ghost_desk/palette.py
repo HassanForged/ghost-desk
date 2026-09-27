@@ -84,8 +84,9 @@ _COMMANDS: tuple[Command, ...] = (
         args_hint="<folder>", needs_arg=True, order=18,
     ),
     Command("curate", "tidy up the skills", order=19),
-    Command("copy", "copy my last reply", order=20),
-    Command("quit", "the ghost fades…", aliases=("exit",), order=21),
+    Command("update", "fetch the latest haunting", order=20),
+    Command("copy", "copy my last reply", order=21),
+    Command("quit", "the ghost fades…", aliases=("exit",), order=22),
 )
 
 #: Canonical lookup by name or alias.
