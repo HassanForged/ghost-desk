@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ghost_desk.config import Config
@@ -139,6 +140,7 @@ def spawn(
     client=None,
     client_factory=None,
     budget=None,
+    on_activity: Callable[[str], None] | None = None,
 ) -> Handoff:
     if depth > 0:
         raise RuntimeError("a little ghost cannot spawn another")
@@ -164,6 +166,7 @@ def spawn(
         client=client,
         gate=gate,
         spawn_fn=None,
+        on_status=on_activity,
         depth=1,
         budget=ghost_budget,
     )

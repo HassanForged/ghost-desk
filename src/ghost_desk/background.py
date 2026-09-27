@@ -219,6 +219,7 @@ def run_due(
     memory: Memory,
     runner: Callable[[str], str],
     now: datetime | None = None,
+    on_activity: Callable[[str, str], None] | None = None,
 ) -> list[str]:
     now = now or _local_now()
     # Runners that accept (prompt, access) get the job's stored access level;
@@ -234,7 +235,13 @@ def run_due(
         if job["last_run"] and job["last_run"][:16] == current[:16]:
             continue
         access = job["access"] if "access" in job.keys() else "ask"
-        result = runner(job["prompt"], access) if takes_access else runner(job["prompt"])
+        if on_activity is not None:
+            on_activity("start", job["name"])
+        try:
+            result = runner(job["prompt"], access) if takes_access else runner(job["prompt"])
+        finally:
+            if on_activity is not None:
+                on_activity("done", job["name"])
         memory.mark_job(job["name"], current)
         memory.add_research(
             topic=job["name"],

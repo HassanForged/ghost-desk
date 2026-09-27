@@ -53,8 +53,10 @@ is re-read against the plan before it's called done.
   `/recall` searches everything ever said.
 - **Lessons** start as drafts. Correct the desk ("no, do it this way") and the
   correction is staged, not applied — `/promote` saves it into memory.
-- **Skills** fold under a few broad parents so the context stays small;
-  `/curate` merges duplicates and prunes dead ones.
+- **Haunts** are domains the ghost knows; **wisps** are small spirits under them
+  and **whispers** are filed tricks. Whispers gather, wisps manifest, and the
+  **seance** (`/seance`) merges wisps, lays the dead to rest, and rewrites each
+  haunt from what its wisps have become — the haunting deepens on its own.
 - **Background jobs** run on a schedule — `/bg add <schedule> <prompt>`,
   `/bg digest` reads what they found.
 

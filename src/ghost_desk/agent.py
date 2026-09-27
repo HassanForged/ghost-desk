@@ -54,6 +54,7 @@ class AgentResult:
     text: str
     report: VerificationReport
     stop_reason: str
+    total_tokens: int = 0
 
 
 @dataclass
@@ -66,6 +67,8 @@ class DeskSession:
     parents_text: str = ""
     personality: str = "helpful"
     frozen_prompt: str = ""
+    pending_whispers: list[tuple[str, str]] = field(default_factory=list)
+    tool_calls_this_turn: int = 0
     gate: PermissionGate | None = None
     unfinished_nudges: int = 0
     access_pending: bool = False
@@ -113,7 +116,13 @@ def system_prompt(
         if loaded:
             parts.append(loaded)
     if session.parents_text:
-        parts.append("Skills:\n" + session.parents_text)
+        parts.append(
+            "Haunts:\n"
+            + session.parents_text
+            + "\nWhen you learn a durable trick worth keeping, start a line with "
+            "'learn this whisper: <topic> - <what you learned>'. "
+            "Three whispers on one topic manifest into a wisp of their own."
+        )
     if include_notes:
         block = verified_notes_block(memory, user_text)
         if block:
@@ -131,7 +140,7 @@ def system_prompt(
     return "\n\n".join(parts)
 
 
-def _keep_facts(data_dir: Path, text: str) -> None:
+def _keep_facts(data_dir: Path, text: str, session: DeskSession) -> None:
     from ghost_desk.context import remember
     from ghost_desk.plan import facts_in
 
@@ -140,11 +149,13 @@ def _keep_facts(data_dir: Path, text: str) -> None:
     named = re.search(r"(?i)the name is\s+(.+?)(?:\.|,|$)", text or "")
     if named:
         remember(data_dir, "memory", "name: " + named.group(1).strip())
-    from ghost_desk.skills import file_learned_trick
-
-    trick = re.search(r"(?i)^learn this trick:\s*(\w+)", text or "")
-    if trick:
-        file_learned_trick(data_dir / "skills", trick.group(1).lower())
+    whisper = re.search(r"(?i)^learn this whisper:\s*(\w+)(?:\s*[:—-]\s*(.+))?", text or "")
+    if whisper:
+        # Filed at turn end (ceremony.finish_and_stage), not here: the disk
+        # diff — not this claim — decides what the ceremony announces.
+        session.pending_whispers.append(
+            (whisper.group(1).lower(), (whisper.group(2) or "").strip())
+        )
 
 
 def _named_outputs(*parts: str) -> list[str]:
@@ -242,6 +253,7 @@ def run_turn(
     spawn_fn: Callable | None = None,
     on_text: Callable[[str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
+    on_tokens: Callable[[int], None] | None = None,
     depth: int = 0,
     budget: Budget | None = None,
     cancelled: Callable[[], bool] | None = None,
@@ -259,6 +271,7 @@ def run_turn(
     report = VerificationReport()
     # Fresh turn, fresh nudge budget: the cap is per user message, not forever.
     session.unfinished_nudges = 0
+    session.tool_calls_this_turn = 0
 
     if depth == 0:
         from ghost_desk.context import draft_lesson, expand_mentions
@@ -267,7 +280,7 @@ def run_turn(
         draft_lesson(config.data_path(), text)
         if persist_session:
             (config.data_path() / "current_session.txt").write_text(session.id, encoding="utf-8")
-        _keep_facts(config.data_path(), text)
+        _keep_facts(config.data_path(), text, session)
 
     user_message = {"role": "user", "content": text}
     session.history.append(user_message)
@@ -357,7 +370,9 @@ def run_turn(
             reply = {"role": "assistant", "content": message}
             session.history.append(reply)
             _log(memory, session, "assistant", message, reply)
-            return AgentResult(message, report, "no_key")
+            if on_tokens is not None:
+                on_tokens(tokens)
+            return AgentResult(message, report, "no_key", total_tokens=tokens)
         except ClientError as exc:
             message = str(exc)
             if not used_fallback:
@@ -373,14 +388,18 @@ def run_turn(
             reply = {"role": "assistant", "content": message}
             session.history.append(reply)
             _log(memory, session, "assistant", message, reply)
-            return AgentResult(message, report, "api_error")
+            if on_tokens is not None:
+                on_tokens(tokens)
+            return AgentResult(message, report, "api_error", total_tokens=tokens)
         except KeyboardInterrupt:
             status("cancelled")
             message = "cancelled"
             reply = {"role": "assistant", "content": message}
             session.history.append(reply)
             _log(memory, session, "assistant", message, reply)
-            return AgentResult(message, report, "cancelled")
+            if on_tokens is not None:
+                on_tokens(tokens)
+            return AgentResult(message, report, "cancelled", total_tokens=tokens)
         tokens += response.prompt_tokens + response.completion_tokens
         assistant = _assistant_message(response.text, response.tool_calls)
         messages.append(assistant)
@@ -400,6 +419,7 @@ def run_turn(
             reason = "stop"
             break
         for call in response.tool_calls:
+            session.tool_calls_this_turn += 1
             status(f"tool {call.name}")
             if call.name == "little_ghost":
                 outcome_payload, ghost_text = _spawn_ghost(
@@ -467,8 +487,36 @@ def run_turn(
     elif not final:
         final = report_text
 
+    final = _harvest_whispers(final, session)
     _commit_final(session, memory, final)
-    return AgentResult(final, report, reason)
+    if on_tokens is not None:
+        on_tokens(tokens)
+    return AgentResult(final, report, reason, total_tokens=tokens)
+
+
+_WHISPER_LINE = re.compile(r"(?i)^learn this whisper:\s*(\w+)(?:\s*[:—-]\s*(.+))?\s*$")
+
+
+def _harvest_whispers(final: str, session: DeskSession) -> str:
+    """Pull the ghost's whisper markers out of its own reply.
+
+    The prompt teaches the model to start a line with
+    'learn this whisper: <topic> - <note>'. Those lines are protocol, not
+    prose: queue them for turn-end filing and keep them out of the chat.
+    Filing itself happens in ceremony.finish_and_stage, which only files
+    them after real tool work — the disk diff, not this claim, decides
+    what the ceremony announces.
+    """
+    kept: list[str] = []
+    for line in (final or "").splitlines():
+        match = _WHISPER_LINE.match(line.strip())
+        if match:
+            session.pending_whispers.append(
+                (match.group(1).lower(), (match.group(2) or "").strip())
+            )
+        else:
+            kept.append(line)
+    return "\n".join(kept).strip()
 
 
 def _commit_final(session: DeskSession, memory: Memory, final: str) -> None:

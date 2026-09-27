@@ -147,10 +147,10 @@ def test_resume_completes_sessions():
     assert complete_arg("resume", "", {}) == []
 
 
-def test_skills_completes_names():
-    ctx = {"skills": ["cook", "code-review"]}
-    assert complete_arg("skills", "co", ctx) == ["cook", "code-review"]
-    assert complete_arg("skills", "x", {}) == []
+def test_haunts_completes_names():
+    ctx = {"haunts": ["cook", "code-review"]}
+    assert complete_arg("haunts", "co", ctx) == ["cook", "code-review"]
+    assert complete_arg("haunts", "x", {}) == []
 
 
 def test_model_current_first():
@@ -202,3 +202,43 @@ def test_known_commands(text):
 )
 def test_unknown_commands(text):
     assert not is_known_command(text)
+
+
+def test_unknown_slash_returns_none():
+    """Unknown /… text goes to the model (None), not swallowed."""
+    from ghost_desk.tui import _slash
+    from unittest.mock import MagicMock
+    console = MagicMock()
+    result = _slash(
+        "/frobnicate the widget",
+        console=console,
+        config=MagicMock(),
+        memory=MagicMock(),
+        session=MagicMock(history=[]),
+        skills_root=MagicMock(),
+    )
+    assert result is None
+    console.print.assert_not_called()
+
+
+def test_known_commands_have_handlers():
+    """The five Phase B handlers dispatch (no 'Unknown command')."""
+    from ghost_desk.tui import _slash
+    from unittest.mock import MagicMock
+    for cmd in ("/setup", "/leaves on", "/picture off", "/retry", "/copy"):
+        console = MagicMock()
+        session = MagicMock()
+        session.history = []
+        result = _slash(
+            cmd,
+            console=console,
+            config=MagicMock(),
+            memory=MagicMock(),
+            session=session,
+            skills_root=MagicMock(),
+            hooks={"toggle_leaves": MagicMock(), "set_picture": MagicMock()},
+        )
+        assert result == "ok", cmd
+        # Should not print "Unknown command".
+        for call in console.print.call_args_list:
+            assert "Unknown command" not in str(call)

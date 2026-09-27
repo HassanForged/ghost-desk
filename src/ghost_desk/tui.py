@@ -16,7 +16,7 @@ from ghost_desk.agent import AgentResult, DeskSession, run_turn
 from ghost_desk.background import BackgroundDesk, build_digest, digest_due, run_due, write_digest
 from ghost_desk.config import Config, SetupError, access_level, needs_setup, save_config, setup_interactive
 from ghost_desk.providers import build_client
-from ghost_desk.curator import curate
+from ghost_desk.seance import seance
 from ghost_desk.memory import Memory
 from ghost_desk.permissions import PermissionGate
 from ghost_desk.agent import PERSONALITIES
@@ -102,14 +102,14 @@ HELP = """\
 /model       show or set the model (/model name)
 /tools       list tools
 /plan        show the current plan
-/skills      list skills, or /skills name for a child
+/haunts      list haunts, or /haunts name to read a wisp
 /memory      show recent verified notes
 /recall      search past sessions (/recall word)
 /sessions    list saved sessions
 /resume      continue a session (/resume id, or the latest)
 /promote     save the newest correction draft into MEMORY.md
 /export      write Markdown folders
-/curate      merge duplicate skills and prune dead ones
+/seance      merge wisps, lay the dead to rest, rewrite haunts
 /bg          list jobs, /bg add <schedule> <prompt>, /bg digest
 /update      fetch and install the latest haunting
 /access      show or change access level (/access full, /access ask)
@@ -227,6 +227,8 @@ def _slash(
     skills_root: Path,
     gate: PermissionGate | None = None,
     update_ui: Callable[[], str] | None = None,
+    health: object | None = None,
+    hooks: dict | None = None,
 ) -> str | None:
     """Return 'quit' to leave, or a string that was handled. None means it is not a slash command."""
     stripped = text.strip()
@@ -242,17 +244,27 @@ def _slash(
         console.print(HELP, markup=False)
         return "ok"
     if command == "new":
+        # SEANCE HOOK — the old session gets its seance before the fresh one
+        # starts; any upgrades show as a ceremony below.
+        from ghost_desk import ceremony
+
+        ceremony.stage_report(skills_root, ceremony.session_end(skills_root, config=config))
         fresh = DeskSession(parents_text=session.parents_text, compactor=session.compactor)
         session.id = fresh.id
         session.history = []
         session.plan = fresh.plan
         session.model_override = ""
+        if health is not None and hasattr(health, "reset"):
+            health.reset()
         replace = getattr(console, "replace", None)
         if callable(replace):
             # Full-screen mode: rebuild the visible chat instead of leaving
             # the old transcript on screen.
             replace([])
         console.print("a fresh haunting.")
+        # CEREMONY HOOK — drain anything the session-end seance staged.
+        # The visual pass replaces the default renderer with its own phases.
+        ceremony.drain_ceremony(skills_root)
         return "ok"
     if command == "personality":
         name = rest.lower()
@@ -309,15 +321,15 @@ def _slash(
         draft = session.plan.draft
         console.print(draft.render() if draft else "No plan yet.")
         return "ok"
-    if command == "skills":
+    if command == "haunts":
         if rest:
             child = load_child(skills_root, rest)
-            console.print(child.body if child else f"No child skill named {rest}.")
+            console.print(child.body if child else f"No wisp named {rest}.")
             return "ok"
         parents = load_parents(skills_root)
         for skill in parents:
             kids = ", ".join(skill.children) if skill.children else "none"
-            console.print(f"{skill.name} — {skill.description} (children: {kids})")
+            console.print(f"{skill.name} — {skill.description} (wisps: {kids})")
         return "ok"
     if command == "memory":
         notes = memory.recent_notes(limit=8)
@@ -372,11 +384,14 @@ def _slash(
         memory.export_markdown(target, skills_root)
         console.print(f"exported {target}")
         return "ok"
-    if command == "curate":
-        stats = curate(skills_root)
+    if command == "seance":
+        from ghost_desk.seance import llm_synthesizer
+
+        stats = seance(skills_root, synthesizer=llm_synthesizer(config))
         session.parents_text = render_index(load_parents(skills_root))
         console.print(
-            f"curated skills: wrote {stats['written']}, removed {stats['removed']}, parents {stats['parents']}"
+            f"seance done: {stats['synthesized']} haunts rewritten from their wisps, "
+            f"{stats['removed']} laid to rest, {stats['written']} kept."
         )
         return "ok"
     if command == "bg":
@@ -386,6 +401,71 @@ def _slash(
             # Full-screen TUI: the animated dissolve/stitch/re-materialize show.
             return update_ui()
         return _update_sync(console)
+    if command == "setup":
+        # Re-pick the brain: show the menu, /model does the swap.
+        console.print("pick a brain for the ghost — /model <name> to swap.")
+        console.print(f"now: {config.provider or 'none'} / {config.model or 'none'}")
+        return "ok"
+    if command == "leaves":
+        if hooks is None or "toggle_leaves" not in hooks:
+            console.print("leaves can't be toggled here.")
+            return "ok"
+        mode = rest.lower()
+        if mode not in ("on", "off"):
+            console.print("usage: /leaves <on|off>")
+            return "ok"
+        hooks["toggle_leaves"](mode == "on")
+        console.print("leaves on." if mode == "on" else "leaves off.")
+        return "ok"
+    if command == "picture":
+        if hooks is None or "set_picture" not in hooks:
+            console.print("picture can't be toggled here.")
+            return "ok"
+        mode = rest.lower()
+        if mode not in ("kitty", "iterm2", "off"):
+            console.print("usage: /picture <kitty|iterm2|off>")
+            return "ok"
+        hooks["set_picture"](None if mode == "off" else mode)
+        console.print(f"picture: {mode}.")
+        return "ok"
+    if command == "retry":
+        # Re-run the last user turn.
+        last_user = None
+        for msg in reversed(session.history):
+            if msg.get("role") == "user" and msg.get("content", "").strip():
+                content = msg["content"].strip()
+                if not content.startswith("/"):
+                    last_user = content
+                    break
+        if not last_user:
+            console.print("nothing to retry.")
+            return "ok"
+        if hooks is not None and "resubmit" in hooks:
+            hooks["resubmit"](last_user)
+        else:
+            console.print("(retry needs the live ui)")
+        return "ok"
+    if command == "copy":
+        # Copy the last ghost reply to the terminal clipboard (OSC 52).
+        last_reply = None
+        for msg in reversed(session.history):
+            if msg.get("role") == "assistant" and msg.get("content", "").strip():
+                last_reply = msg["content"].strip()
+                break
+        if not last_reply:
+            console.print("nothing to copy.")
+            return "ok"
+        import base64
+        import sys
+        b64 = base64.b64encode(last_reply.encode("utf-8")).decode("ascii")
+        sys.stdout.write(f"\033]52;c;{b64}\033\\")
+        sys.stdout.flush()
+        console.print("copied.")
+        return "ok"
+    # Unknown /… goes to the model, not swallowed.
+    from ghost_desk.palette import is_known_command
+    if not is_known_command(text):
+        return None
     console.print("Unknown command. /help lists them.")
     return "ok"
 
@@ -430,15 +510,37 @@ def _stitch_bar(frame: int, width: int) -> list[tuple[str, str]]:
 
 
 def _update_ghost_fragments(seq: UpdateSequence, width: int, height: int, pad: str):
-    """Ghost-pane frames for the /update show: dissolve, stitch, re-materialize."""
-    from ghost_desk.face import render_blocks
+    """Ghost-pane frames for the /update show: dissolve, stitch, re-materialize.
 
-    portrait = [list(row) for row in render_blocks(width=width, height=height)]
+    Uses the reference-derived sprite with deterministic materialization
+    steps: the dissolve runs the materialization backwards, the
+    rematerialize runs it forwards.
+    """
+    from ghost_desk.face import (
+        dither_shade,
+        fragments_from_grid,
+        frame_grid,
+        materialize_steps,
+    )
+
+    grid = dither_shade(frame_grid("neutral", width=22))
+    steps = materialize_steps(grid, seed=0x6A05, steps=12)
     frac = seq.dissolve_frac
-    if frac >= 1.0:
-        portrait = [[("", " ")] * width for _ in range(height)]
-    elif frac > 0:
-        portrait = _dither_out(portrait, frac)
+    # frac 0->1 during dissolve, 1->0 during rematerialize; map to a step.
+    idx = int((1.0 - frac) * (len(steps) - 1))
+    idx = max(0, min(len(steps) - 1, idx))
+    portrait = fragments_from_grid(steps[idx])
+    # Center the 22-wide sprite in the pane.
+    sprite_w = len(portrait[0]) if portrait else 0
+    left = max(0, (width - sprite_w) // 2)
+    blank = ("", " ")
+    centered = []
+    for row in portrait:
+        centered.append([blank] * left + list(row) + [blank] * max(0, width - left - sprite_w))
+    # Pad vertically to the pane height.
+    while len(centered) < height:
+        centered.append([blank] * width)
+    portrait = centered[:height]
     fragments: list[tuple[str, str]] = []
     for row in portrait:
         fragments.append(("", pad))
@@ -602,6 +704,13 @@ class _Log:
 def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSession, skills_root: Path, status: Status) -> int:
     import asyncio
 
+    from ghost_desk.intro import play_intro
+
+    # Fresh-boot intro: materialize, wordmark, tagline. Skippable, off via
+    # GHOST_DESK_INTRO=off. Never plays on /new or /resume (those stay
+    # inside the running UI).
+    play_intro()
+
     from prompt_toolkit.application import Application
     from prompt_toolkit.buffer import Buffer
     from prompt_toolkit.key_binding import KeyBindings
@@ -611,7 +720,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     from prompt_toolkit.layout.margins import ScrollbarMargin
     from prompt_toolkit.styles import Style
 
-    from ghost_desk.face import activity_for, render_blocks
+    from ghost_desk.face import activity_for
 
     import threading
 
@@ -647,6 +756,15 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     state = {"activity": "idle", "tick": 0, "stream": "", "busy": False, "started": 0.0, "cancel": False,
              "update_seq": None, "update_nagged": False}
+
+    # 90s pixel pass: the ghost's little life, context meter, and crew.
+    from ghost_desk.life import GhostLife
+    from ghost_desk.health import ContextHealth
+    from ghost_desk.crew import CrewState
+
+    life = GhostLife()
+    health = ContextHealth(model=config.model)
+    crew = CrewState()
 
     def refresh() -> None:
         if app.is_running:
@@ -707,11 +825,32 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     from ghost_desk.images import detect_protocol, install_picture
 
-    picture_protocol = detect_protocol()
+    # Mutable UI toggles (/leaves, /picture): stored in a dict so the
+    # _slash hooks can flip them at runtime.
+    ui_toggles = {
+        "picture_protocol": detect_protocol(),
+        "leaf_field": None,
+    }
 
     from ghost_desk.leaves import LeafField, leaves_enabled
 
-    leaf_field = LeafField() if leaves_enabled() else None
+    if leaves_enabled():
+        ui_toggles["leaf_field"] = LeafField()
+
+    # Hooks for the /… command handlers that need live UI state.
+    resubmit_queue: list[str] = []
+
+    def _toggle_leaves(on: bool) -> None:
+        ui_toggles["leaf_field"] = LeafField() if on else None
+
+    def _set_picture(mode: str | None) -> None:
+        ui_toggles["picture_protocol"] = mode
+
+    hooks = {
+        "toggle_leaves": _toggle_leaves,
+        "set_picture": _set_picture,
+        "resubmit": resubmit_queue.append,
+    }
 
     def ghost_fragments():
         width, height = chrome["ghost_width"], chrome["ghost_height"]
@@ -720,17 +859,56 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         if seq is not None:
             # The /update show takes over the ghost pane: dissolve, stitch, re-materialize.
             return _update_ghost_fragments(seq, width, height, pad)
-        if picture_protocol:
+        if ui_toggles["picture_protocol"]:
             # The real picture paints over this blank space after each flush.
             portrait = [[("", " ")] * width for _ in range(height)]
         else:
-            # The ghost is still when idle and breathes while working.
-            bob = state["tick"] % 2 if state["busy"] else 0
-            portrait = [list(row) for row in render_blocks(width=width, height=height, bob=bob)]
+            # The 90s sprite: GhostLife picks the frame (blink, glance,
+            # sleep, busy scan); it bobs while working.
+            from ghost_desk.face import render_sprite_frame
+
+            frame_name = life.frame()
+            # Past 85% context, occasionally glance at the meter.
+            if frame_name == "neutral" and health.glance_at_meter() and life.tick_count % 10 == 0:
+                frame_name = "glance_meter"
+            bob = life.tick_count % 2 if state["busy"] else 0
+            portrait = [list(row) for row in render_sprite_frame(frame_name, width=width, bob=bob)]
+            # Error flinch: shift ±1 cell.
+            dx = life.flinch_dx()
+            if dx != 0:
+                blank = ("", " ")
+                for i, row in enumerate(portrait):
+                    if dx > 0:
+                        portrait[i] = [blank] * dx + row[:-dx]
+                    else:
+                        portrait[i] = row[-dx:] + [blank] * (-dx)
+        leaf_field = ui_toggles["leaf_field"]
         if leaf_field is not None:
-            for lx, ly, color, char in leaf_field.cells():
-                if 0 <= ly < height and 0 <= lx < width:
-                    portrait[ly][lx] = (f"fg:{color}", char)
+            for lx, ly, frag_rows in leaf_field.fragments():
+                for dy, frow in enumerate(frag_rows):
+                    y = ly + dy
+                    if not 0 <= y < height:
+                        continue
+                    for dx, cell in enumerate(frow):
+                        x = lx + dx
+                        if 0 <= x < width:
+                            portrait[y][x] = cell
+        # Sleep Z's float above the head; done-bounce confetti is restrained.
+        from ghost_desk.face import confetti_fragments, sleep_z_fragments
+        overlays = []
+        if life.sleeping:
+            overlays += sleep_z_fragments(life.tick_count, width, height)
+        if life.bouncing():
+            overlays += confetti_fragments(life.tick_count, width, height)
+        for ox, oy, frag_rows in overlays:
+            for dy, frow in enumerate(frag_rows):
+                y = oy + dy
+                if not 0 <= y < height:
+                    continue
+                for dx, cell in enumerate(frow):
+                    x = ox + dx
+                    if 0 <= x < width:
+                        portrait[y][x] = cell
         fragments: list[tuple[str, str]] = []
         for row in portrait:
             fragments.append(("", pad))
@@ -752,6 +930,42 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         gap = max(1, COL_W - len(left) - len(right) - 1)
         return [("class:brand", left), ("class:muted", " " * gap + right + " ")]
 
+    def context_fragments():
+        # Twenty chunky blocks, no label, no percentage. Lilac <60%,
+        # amber 60-84%, red at 85%+.
+        colors = health.block_colors()
+        pad = " " * ((COL_W - len(colors) * 2) // 2)
+        fragments = [("", pad)]
+        for color in colors:
+            fragments.append((f"fg:{color}", "██"))
+        fragments.append(("", "\n"))
+        return fragments
+
+    def divider_fragments():
+        # One pixel divider between the ghost/header area and the chat.
+        from ghost_desk.face import pixel_rule
+
+        cells = pixel_rule(COL_W)[0]
+        return [(style, ch) for style, ch in cells] + [("", "\n")]
+
+    def crew_fragments():
+        # Ghost crew row below the main ghost: one mini per active worker.
+        from ghost_desk.face import CREW_LABELS, crew_frame
+
+        visible = crew.visible
+        if not visible:
+            return []
+        fragments = [("", " " * ((COL_W - len(visible) * 18) // 2))]
+        for i, member in enumerate(visible):
+            frame = crew_frame(member.activity, life.tick_count % 2)
+            # Flatten the first row of the mini ghost as a label line.
+            label = CREW_LABELS.get(member.activity, "")
+            fragments.append(("class:muted", f"{label} "))
+        if crew.overflow:
+            fragments.append(("class:muted", f"+{crew.overflow} more"))
+        fragments.append(("", "\n"))
+        return fragments
+
     def chips_fragments():
         if lines or state["busy"] or state["stream"]:
             return []
@@ -759,6 +973,130 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         return [("class:chip", row.center(COL_W) + "\n")]
 
     buffer = Buffer(multiline=True)
+
+    # Command palette (Phase B): floating panel above the input pill.
+    # Opens when the input starts with `/`. ↑/↓ navigate, Tab completes,
+    # Enter runs (or enters arg completion), Esc dismisses / goes back.
+    from ghost_desk.palette import (
+        complete_arg,
+        filter_commands,
+    )
+
+    pal: dict = {
+        "matches": [],
+        "selected": 0,
+        "arg_mode": False,
+        "arg_candidates": [],
+        "arg_selected": 0,
+        "arg_command": None,
+    }
+
+    def _pal_ctx() -> dict:
+        """Context for arg completion: sessions, skills, etc."""
+        ctx: dict = {"sessions": [], "skills": []}
+        try:
+            if hasattr(memory, "list_sessions"):
+                sessions = memory.list_sessions()
+                ctx["sessions"] = [
+                    s.get("id", s) if isinstance(s, dict) else str(s) for s in sessions
+                ]
+        except Exception:
+            pass
+        return ctx
+
+    def _pal_update() -> None:
+        """Refresh palette matches from the buffer text."""
+        text = buffer.text
+        if state["busy"] or not text.startswith("/") or len(text) < 2:
+            pal["matches"] = []
+            pal["selected"] = 0
+            pal["arg_mode"] = False
+            return
+        if pal["arg_mode"]:
+            # In arg mode, filter candidates by what's after the command.
+            cmd = pal["arg_command"]
+            partial = text.partition(" ")[2] if " " in text else ""
+            cands = complete_arg(cmd.name, partial, _pal_ctx())
+            pal["arg_candidates"] = cands
+            pal["arg_selected"] = min(pal["arg_selected"], max(0, len(cands) - 1))
+            return
+        # Command mode: filter on the head (up to first space).
+        query = text[1:].partition(" ")[0]
+        pal["matches"] = filter_commands(query)[:8]
+        pal["selected"] = min(pal["selected"], max(0, len(pal["matches"]) - 1))
+
+    def _pal_visible() -> bool:
+        if state["busy"]:
+            return False
+        if pal["arg_mode"]:
+            return bool(pal["arg_candidates"])
+        return bool(buffer.text.startswith("/") and len(buffer.text) >= 2 and pal["matches"])
+
+    buffer.on_text_changed.add_handler(lambda _: _pal_update())
+
+    def palette_fragments():
+        """The floating command palette panel, above the input pill."""
+        if not _pal_visible():
+            return []
+        w = COL_W - 4
+        lines: list[list[tuple[str, str]]] = []
+
+        def _row(cells: list[tuple[str, str]]) -> None:
+            lines.append(cells + [("", "\n")])
+
+        # Top border.
+        _row([("class:pill", "╭" + "─" * (w - 2) + "╮")])
+        if pal["arg_mode"]:
+            cmd = pal["arg_command"]
+            # Header: /command <arg> — description.
+            header = [
+                ("class:ask", f"/{cmd.name} "),
+                ("class:muted", f"{cmd.args_hint} — {cmd.description}"),
+            ]
+            _row([("class:pill", "│ ")] + header + [("class:pill", " │")])
+            # Arg candidates.
+            for i, cand in enumerate(pal["arg_candidates"][:8]):
+                sel = i == pal["arg_selected"]
+                style = "class:bubble" if sel else ""
+                _row([("class:pill", "│ "), (style, f"{cand}".ljust(w - 4)), ("class:pill", " │")])
+            footer = "↑↓ pick · tab fill · enter run · esc back"
+        else:
+            # Header: selected command with description.
+            if pal["matches"]:
+                m = pal["matches"][pal["selected"]]
+                cmd = m.command
+                header = [
+                    ("class:ask", f"/{cmd.name} "),
+                ]
+                if cmd.args_hint:
+                    header.append(("class:muted", f"{cmd.args_hint} "))
+                header.append(("class:muted", f"— {cmd.description}"))
+                _row([("class:pill", "│ ")] + header + [("class:pill", " │")])
+            # Command rows.
+            for i, m in enumerate(pal["matches"][:8]):
+                cmd = m.command
+                sel = i == pal["selected"]
+                style = "class:bubble" if sel else ""
+                name = f"/{cmd.name}"
+                row_cells = [("class:pill", "│ "), ("class:ask" if not sel else style, name.ljust(12))]
+                row_cells.append((style, f" {cmd.description}".ljust(w - 16)))
+                row_cells.append(("class:pill", " │"))
+                _row(row_cells)
+            footer = "↑↓ pick · tab fill · enter run · esc dismiss"
+        _row([("class:pill", "│ "), ("class:muted", footer.ljust(w - 4)), ("class:pill", " │")])
+        _row([("class:pill", "╰" + "─" * (w - 2) + "╯")])
+        # Flatten.
+        frags: list[tuple[str, str]] = []
+        for row in lines:
+            frags.extend(row)
+        return frags
+
+    def _pal_height() -> int:
+        if not _pal_visible():
+            return 0
+        if pal["arg_mode"]:
+            return min(len(pal["arg_candidates"]), 8) + 4
+        return min(len(pal["matches"]), 8) + 4
 
     def ask_allow(question: str) -> bool:
         event = threading.Event()
@@ -788,13 +1126,17 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         if not text.strip() or state["busy"]:
             return
         add_line("you", text.strip())
-        handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root, gate=gate, update_ui=_begin_update)
+        handled = _slash(text, console=log, config=config, memory=memory, session=session, skills_root=skills_root, gate=gate, update_ui=_begin_update, health=health, hooks=hooks)
         if handled == "quit":
             app.exit(result=0)
             return
-        if handled == "ok":
+        if handled == "ok" and not resubmit_queue:
             refresh()
             return
+        if resubmit_queue:
+            # /retry: run the last user turn again.
+            text = resubmit_queue.pop(0)
+            add_line("you", text.strip())
         state["busy"] = True
         state["cancel"] = False
         state["activity"] = "working"
@@ -804,13 +1146,22 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         def work() -> None:
             def on_text(delta: str) -> None:
                 state["stream"] += delta
+                life.set_typing(False)  # streaming, not typing
                 app.invalidate()
 
             def on_status(note: str) -> None:
                 state["activity"] = activity_for(note)
                 if note.startswith("tool "):
                     bump_tool(note[5:].strip())
+                    life.mark_tool_work()
+                    # Real crew worker: add it.
+                    from ghost_desk.face import classify_activity
+
+                    crew.add(note[5:].strip(), classify_activity(note[5:].strip()), note[5:].strip())
                 app.invalidate()
+
+            def on_tokens(tokens: int) -> None:
+                health.add_turn(reported_tokens=tokens)
 
             def spawn_fn(**kwargs):
                 return spawn(client_factory=build_client, **kwargs)
@@ -825,8 +1176,15 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                     spawn_fn=spawn_fn,
                     on_text=on_text,
                     on_status=on_status,
+                    on_tokens=on_tokens,
                     cancelled=lambda: state["cancel"],
                 )
+                # Fallback if no tokens reported: estimate from text.
+                if result.total_tokens == 0:
+                    health.add_turn(text=text + result.text)
+                warning = health.take_warning()
+                if warning:
+                    add_line("ghost", warning)
                 if result.stop_reason == "cancelled":
                     # The user moved on: drop any late streamed text.
                     state["stream"] = ""
@@ -836,8 +1194,22 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                     for check in result.report.checks:
                         if not check.ok:
                             add_line("note", "✗ " + check.line())
+                    # Success bounce, but only after tool work.
+                    life.mark_success()
             except Exception as exc:
                 add_line("note", "something moved in the dark: " + str(exc))
+                life.mark_error()
+            # CEREMONY HOOK — file the turn's whispers, manifest what ripened,
+            # stage any upgrade. Staged ceremonies drain with the pixel
+            # renderer when the next prompt paints; until then the report waits
+            # in the state file (never celebrated twice).
+            from ghost_desk import ceremony
+
+            _report = ceremony.finish_and_stage(skills_root, session=session, config=config)
+            if ceremony.stage_report(skills_root, _report):
+                # Something real upgraded: the animate tick plays the pixel
+                # ceremony (run_in_terminal) when the prompt repaints.
+                state["ceremony_due"] = True
             state["stream"] = ""
             state["cancel"] = False
             state["activity"] = "idle"
@@ -868,7 +1240,75 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     @bindings.add("enter")
     def _enter(event) -> None:
+        # Palette: Enter runs the command, or enters arg completion.
+        if _pal_visible() and not pal["arg_mode"] and pal["matches"]:
+            cmd = pal["matches"][pal["selected"]].command
+            if cmd.needs_arg:
+                # Enter arg mode: keep the command, complete the arg.
+                pal["arg_mode"] = True
+                pal["arg_command"] = cmd
+                pal["arg_selected"] = 0
+                buf = event.current_buffer
+                buf.text = f"/{cmd.name} "
+                buf.cursor_position = len(buf.text)
+                _pal_update()
+                return
+        if _pal_visible() and pal["arg_mode"] and pal["arg_candidates"]:
+            # Fill the selected arg and submit.
+            cand = pal["arg_candidates"][pal["arg_selected"]]
+            buf = event.current_buffer
+            cmd = pal["arg_command"]
+            buf.text = f"/{cmd.name} {cand}"
+            pal["arg_mode"] = False
         submit()
+
+    @bindings.add("up")
+    def _pal_up(event) -> None:
+        if not _pal_visible():
+            return
+        if pal["arg_mode"]:
+            pal["arg_selected"] = (pal["arg_selected"] - 1) % max(1, len(pal["arg_candidates"]))
+        else:
+            pal["selected"] = (pal["selected"] - 1) % max(1, len(pal["matches"]))
+
+    @bindings.add("down")
+    def _pal_down(event) -> None:
+        if not _pal_visible():
+            return
+        if pal["arg_mode"]:
+            pal["arg_selected"] = (pal["arg_selected"] + 1) % max(1, len(pal["arg_candidates"]))
+        else:
+            pal["selected"] = (pal["selected"] + 1) % max(1, len(pal["matches"]))
+
+    @bindings.add("tab")
+    def _pal_tab(event) -> None:
+        if not _pal_visible():
+            return
+        buf = event.current_buffer
+        if pal["arg_mode"] and pal["arg_candidates"]:
+            cand = pal["arg_candidates"][pal["arg_selected"]]
+            cmd = pal["arg_command"]
+            buf.text = f"/{cmd.name} {cand}"
+        elif pal["matches"]:
+            cmd = pal["matches"][pal["selected"]].command
+            buf.text = f"/{cmd.name} " if cmd.needs_arg else f"/{cmd.name}"
+        buf.cursor_position = len(buf.text)
+        _pal_update()
+
+    @bindings.add("escape")
+    def _pal_esc(event) -> None:
+        if pal["arg_mode"]:
+            # Back to the command list.
+            pal["arg_mode"] = False
+            buf = event.current_buffer
+            cmd = pal["arg_command"]
+            buf.text = f"/{cmd.name}"
+            buf.cursor_position = len(buf.text)
+            _pal_update()
+            return
+        if _pal_visible():
+            # Dismiss: clear the slash input.
+            event.current_buffer.reset()
 
     @bindings.add("escape", "enter")
     def _newline(event) -> None:
@@ -898,9 +1338,14 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         while True:
             await asyncio.sleep(0.5)
             ticked = False
+            # The ghost's little life ticks every 0.5s: blink, glance, sleep.
+            life.tick()
+            crew.tick()
+            ticked = True
             if state["busy"]:
                 state["tick"] += 1
-                ticked = True
+            # Sync busy/typing into the life state.
+            life.set_busy(state["busy"])
             seq = state.get("update_seq")
             if seq is not None:
                 if seq.tick():
@@ -908,9 +1353,31 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                         add_line(role, text)
                     state["update_seq"] = None
                 ticked = True
-            if leaf_field is not None and leaf_field.tick(
+            lf = ui_toggles["leaf_field"]
+            if lf is not None and lf.tick(
                 time.monotonic(), chrome["ghost_width"], chrome["ghost_height"]
             ):
+                ticked = True
+            # Upgrade ceremony: staged at turn end, or while away. Played here
+            # in the app thread via run_in_terminal — the full-screen UI is
+            # suspended, the pixel ceremony paints raw, any key skips, and
+            # the UI repaints cleanly when it returns.
+            if state.pop("ceremony_due", False):
+                from prompt_toolkit.application.run_in_terminal import (
+                    run_in_terminal,
+                )
+
+                from ghost_desk import ceremony as _ceremony
+                from ghost_desk.ceremony_fx import play_ceremony
+
+                def _play() -> None:
+                    _ceremony.drain_ceremony(
+                        skills_root,
+                        render=lambda report: play_ceremony(_ceremony.phases(report)),
+                    )
+
+                async with run_in_terminal():
+                    _play()
                 ticked = True
             if ticked:
                 app.invalidate()
@@ -976,7 +1443,30 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
         ),
         style="class:footer",
     )
-    body = HSplit([header, ghost, chat, chips, pill, hint], width=COL_W)
+    context_bar = Window(
+        height=1,
+        content=FormattedTextControl(context_fragments),
+        style="class:meter",
+    )
+    divider = Window(
+        height=1,
+        content=FormattedTextControl(divider_fragments),
+        style="class:rule",
+    )
+    crew_row = Window(
+        height=1,
+        content=FormattedTextControl(crew_fragments),
+        style="class:side",
+    )
+    palette_win = Window(
+        height=_pal_height,
+        content=FormattedTextControl(palette_fragments),
+        style="class:palette",
+    )
+    body = HSplit(
+        [header, context_bar, ghost, crew_row, divider, chat, chips, palette_win, pill, hint],
+        width=COL_W,
+    )
     layout = Layout(VSplit([Window(style="class:chat"), body, Window(style="class:chat")]))
     app = Application(
         layout=layout,
@@ -996,6 +1486,7 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
                 "greet": "#ededed",
                 "chip": "#8a8a8a",
                 "pill": "#3d3d3d",
+                "palette": "bg:#090909",
                 "chips": "bg:#090909",
                 "caption": "#5a5a5a",
                 "divider": "#2e2e2e bg:#090909",
@@ -1014,6 +1505,14 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
 
     def startup() -> None:
         app.create_background_task(animate())
+        # CEREMONY HOOK — a previous session's seance may have staged an
+        # upgrade ceremony ("while you were away — time for your upgrade.").
+        # The animate tick plays it via run_in_terminal: safe raw painting,
+        # any key skips, the UI repaints cleanly afterwards.
+        from ghost_desk import ceremony as _ceremony
+
+        if _ceremony.has_staged(skills_root):
+            state["ceremony_due"] = True
 
         def _nag(_remote: str) -> None:
             # One dim line per session, never a modal, never blocking.
@@ -1028,11 +1527,20 @@ def _run_chat(config: Config, console: Console, memory: Memory, session: DeskSes
     app.pre_run_callables.append(startup)
     app.layout.focus(typed)
     cleanup_picture = install_picture(
-        app.output, picture_protocol, chrome, lambda: (state["busy"], state["tick"])
+        app.output, ui_toggles["picture_protocol"], chrome, lambda: (state["busy"], state["tick"])
     )
     try:
         app.run()
     finally:
+        # SEANCE HOOK — session end: janitorial pass + synthesis for changed
+        # haunts, then verify-then-announce. Upgrades stage a ceremony that the
+        # next session drains ("while you were away — time for your upgrade.").
+        # Safe to run twice: an empty disk diff stages nothing.
+        from ghost_desk import ceremony
+
+        ceremony.stage_report(
+            skills_root, ceremony.session_end(skills_root, config=config, while_away=True)
+        )
         cleanup_picture()
         desk.stop()
         memory.close()
@@ -1113,6 +1621,19 @@ def run_tui(
     if digest_due(memory):
         console.print("[dim]Monthly digest is ready for review. /bg digest writes it. Nothing runs by itself.[/dim]")
     console.print("Talk here.  /help for commands", style="dim")
+    # CEREMONY HOOK — a session-end seance may have staged an upgrade ceremony
+    # ("while you were away — time for your upgrade."). Drain it before input.
+    from functools import partial
+
+    from ghost_desk import ceremony as _ceremony
+
+    _ceremony.drain_ceremony(
+        skills_root,
+        render=partial(
+            _ceremony.render_blocking,
+            print_fn=lambda text: console.print(text, markup=False),
+        ),
+    )
 
     def unattended(prompt: str, access: str = "ask") -> str:
         gate = PermissionGate(
@@ -1206,8 +1727,25 @@ def run_tui(
                 status.set("cancelled")
                 continue
             _print_result(console, result, streamed["on"])
+            # CEREMONY HOOK — file the turn's whispers, manifest what ripened,
+            # stage and drain any upgrade ceremony before the next prompt.
+            # The visual pass replaces render= with its own phase renderer.
+            _ceremony.turn_end(
+                skills_root,
+                session=session,
+                config=config,
+                render=partial(
+                    _ceremony.render_blocking,
+                    print_fn=lambda text: console.print(text, markup=False),
+                ),
+            )
             status.set("ready")
     finally:
+        # SEANCE HOOK — clean shutdown: same session-end seance as /quit.
+        # Safe to run twice: an empty disk diff stages nothing.
+        _ceremony.stage_report(
+            skills_root, _ceremony.session_end(skills_root, config=config, while_away=True)
+        )
         desk.stop()
         memory.close()
     return 0

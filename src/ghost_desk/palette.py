@@ -54,7 +54,7 @@ _COMMANDS: tuple[Command, ...] = (
         args_hint="<tone>", needs_arg=True, order=6,
     ),
     Command(
-        "skills", "list skills, or peek at one",
+        "haunts", "list haunts, or peek at a wisp",
         args_hint="<name>", needs_arg=True, order=7,
     ),
     Command("memory", "show what i've remembered", order=8),
@@ -75,7 +75,7 @@ _COMMANDS: tuple[Command, ...] = (
         "picture", "toggle the portrait style",
         args_hint="<kitty|iterm2|off>", needs_arg=True, order=13,
     ),
-    Command("help", "list every trick i know", order=14),
+    Command("help", "list every whisper i know", order=14),
     Command("tools", "list what i can do", order=15),
     Command("plan", "show the current plan", order=16),
     Command("promote", "save a correction to memory", order=17),
@@ -83,7 +83,7 @@ _COMMANDS: tuple[Command, ...] = (
         "export", "write everything to markdown",
         args_hint="<folder>", needs_arg=True, order=18,
     ),
-    Command("curate", "tidy up the skills", order=19),
+    Command("seance", "merge wisps and rewrite the haunts", order=19),
     Command("update", "fetch the latest haunting", order=20),
     Command("copy", "copy my last reply", order=21),
     Command("quit", "the ghost fades…", aliases=("exit",), order=22),
@@ -100,7 +100,7 @@ COMMANDS: tuple[Command, ...] = _COMMANDS
 
 #: Commands registered here whose `_slash` wiring lands in Phase B.
 #: (access is listed too: its wiring is landing separately.)
-STUB_COMMANDS = frozenset({"access", "setup", "leaves", "picture", "retry", "copy"})
+STUB_COMMANDS: frozenset[str] = frozenset()
 
 
 # Phase B: wire into _slash
@@ -208,8 +208,8 @@ _ARG_PROVIDERS = {
     "resume": lambda partial, ctx: _prefix(
         [str(s) for s in ctx.get("sessions", [])], partial
     ),
-    "skills": lambda partial, ctx: _prefix(
-        [str(s) for s in ctx.get("skills", [])], partial
+    "haunts": lambda partial, ctx: _prefix(
+        [str(s) for s in ctx.get("haunts", [])], partial
     ),
     "model": _model_provider,
     "personality": _personality_provider,

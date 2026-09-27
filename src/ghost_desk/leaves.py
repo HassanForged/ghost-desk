@@ -2,7 +2,7 @@
 
 One leaf every few seconds, a slow fall, a gentle sway. Ambient and sparse:
 at most five leaves at once, muted fall tones. Turn it off with
-GHOST_DESK_LEAVES=off.
+GHOST_DESK_LEAVES=off. Leaves are tiny (<=3x3) pixel sprites, not glyphs.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import os
 import random
 from dataclasses import dataclass, field
 
-LEAF_CHAR = "\u2767"  # ❧ rotated floral heart: reads as a little leaf
+from ghost_desk.face import leaf_fragments, leaf_sprites
 
 # Muted fall tones. Tasteful, not neon.
 LEAF_COLORS = ("#c98f4e", "#a9663f", "#d4a94e", "#a85f5f")
@@ -39,7 +39,7 @@ class Leaf:
     sway: float
     phase: float
     color: str
-    char: str = LEAF_CHAR
+    pattern: list[list[int]]
 
 
 @dataclass
@@ -73,6 +73,8 @@ class LeafField:
 
     def _spawn(self, width: int) -> Leaf:
         rng = self._rng
+        sprites = leaf_sprites()
+        pattern, _ = sprites[rng.randrange(len(sprites))]
         return Leaf(
             x=rng.uniform(1, max(2, width - 1)),
             y=-0.5,
@@ -80,8 +82,14 @@ class LeafField:
             sway=rng.uniform(0.4, 1.0),
             phase=rng.uniform(0, math.tau),
             color=rng.choice(LEAF_COLORS),
+            pattern=pattern,
         )
 
-    def cells(self) -> list[tuple[int, int, str, str]]:
-        """(x, y, color, char) for each leaf currently on screen."""
-        return [(int(leaf.x), int(leaf.y), leaf.color, leaf.char) for leaf in self.leaves if leaf.y >= 0]
+    def fragments(self) -> list[tuple[int, int, list[list[tuple[str, str]]]]]:
+        """(x, y, fragment_rows) for each leaf: a <=3x3 sprite at (x, y)."""
+        out = []
+        for leaf in self.leaves:
+            if leaf.y < 0:
+                continue
+            out.append((int(leaf.x), int(leaf.y), leaf_fragments(leaf.pattern, leaf.color)))
+        return out

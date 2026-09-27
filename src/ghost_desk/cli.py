@@ -9,7 +9,7 @@ from pathlib import Path
 from ghost_desk import __version__
 from ghost_desk.background import parse_schedule, write_digest
 from ghost_desk.config import Config, SetupError, load_config, needs_setup, setup_interactive
-from ghost_desk.curator import curate
+from ghost_desk.seance import llm_synthesizer, seance
 from ghost_desk.memory import Memory
 from ghost_desk.skills import ensure_skills
 from ghost_desk.tui import export_now, run_tui
@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("smoke", help="Ask the saved brain one short question without printing secrets")
     export = commands.add_parser("export", help="Write sessions, notes, skills, and research as Markdown")
     export.add_argument("--out", default="", help="Output folder. Default: data_dir/export")
-    commands.add_parser("curate", help="Rewrite parent skills, merge duplicates, and prune dead children")
+    commands.add_parser("seance", help="Hold a seance: merge duplicate wisps, lay the dead to rest, rewrite haunts from their wisps")
     commands.add_parser("digest", help="Write the monthly review digest")
     commands.add_parser("sessions", help="List saved sessions")
     commands.add_parser("gateway", help="Listen on Telegram and answer with this desk")
@@ -141,10 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         path = export_now(config, target)
         print(f"exported {path}")
         return 0
-    if args.command == "curate":
+    if args.command == "seance":
         root = ensure_skills(config.data_path())
-        stats = curate(root)
-        print(f"curated skills: wrote {stats['written']}, removed {stats['removed']}, parents {stats['parents']}")
+        stats = seance(root, synthesizer=llm_synthesizer(config))
+        print(f"seance done: {stats['synthesized']} haunts rewritten from their wisps, {stats['removed']} laid to rest, {stats['written']} kept.")
         return 0
     if args.command == "gateway":
         from ghost_desk.gateway import serve

@@ -54,11 +54,13 @@ def test_cells_stay_in_bounds_with_fall_colors():
     field = LeafField()
     for step in range(0, 400):
         field.tick(step * 0.5, 30, 38)
-        for x, y, color, char in field.cells():
+        for x, y, frag_rows in field.fragments():
             assert 0 <= x < 30
             assert 0 <= y < 38
-            assert color in LEAF_COLORS
-            assert char
+            # Sprites are <=3x3.
+            assert 1 <= len(frag_rows) <= 3
+            assert 1 <= len(frag_rows[0]) <= 3
+            assert frag_rows
 
 
 def test_leaves_can_be_turned_off(monkeypatch):
